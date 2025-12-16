@@ -1,0 +1,17 @@
+
+(* i dropped the commas cause theyre annoying :3 *)
+
+expr = logicalOR;
+logicalOR = logicalAND {'||' logicalAND};
+logicalAND = comparison {'&&' comparison};
+comparison = bitwise [ comparisonOperator bitwise ];
+bitwise = bitshift { ('&' | '|' | '^') bitshift };
+bitshift = term { ( '<<' | '>>' ) term };
+term = factor { ( '+' | '-' ) factor };
+factor = unary { ( '*' | '/' | '%' ) unary };
+unary = ('!' | '-' | '&') (unary | postfix);
+postfix = primary {'.' identifier | '.*' | '[' expr ']' | '(' args ')' };
+primary = '(' expr ')' | primative;
+
+comparisonOperator = '>' | '>=' | '<' | '<=' | '==' | '!=';
+primative = NUMBER | STRING | CHARACTER | BOOL | NULL;
