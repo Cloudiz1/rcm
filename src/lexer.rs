@@ -135,6 +135,7 @@ impl Tokenizer {
         tokenizer
             .keywords
             .insert(String::from("false"), Token::Bool(false));
+        tokenizer.keywords.insert(String::from("null"), Token::Null);
 
         tokenizer
     }
@@ -272,6 +273,7 @@ impl Tokenizer {
             self.advance();
         }
 
+        self.advance();
         if let Some(keyword) = self.keywords.get(&out) {
             return Some(keyword.clone());
         }
@@ -414,6 +416,7 @@ impl Tokenizer {
             self.advance();
         }
 
+        out.push(Token::EOF);
         out
     }
 }

@@ -1,5 +1,5 @@
-
 (* i dropped the commas cause theyre annoying :3 *)
+(* hey genius dot operator is a binary operator you moron *)
 
 expr = logicalOR;
 logicalOR = logicalAND {'||' logicalAND};
@@ -10,7 +10,7 @@ bitshift = term { ( '<<' | '>>' ) term };
 term = factor { ( '+' | '-' ) factor };
 factor = unary { ( '*' | '/' | '%' ) unary };
 unary = ('!' | '-' | '&') (unary | postfix);
-postfix = primary {'.' identifier | '.*' | '[' expr ']' | '(' args ')' };
+postfix = primary {'.' identifier | '.*' | '[' expr ']' | '(' args ')' }; 
 primary = '(' expr ')' | primative;
 
 comparisonOperator = '>' | '>=' | '<' | '<=' | '==' | '!=';
