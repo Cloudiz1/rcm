@@ -273,7 +273,7 @@ impl Tokenizer {
             self.advance();
         }
 
-        self.advance();
+        // self.advance();
         if let Some(keyword) = self.keywords.get(&out) {
             return Some(keyword.clone());
         }
@@ -430,5 +430,56 @@ pub fn print_token(token: Token) {
 pub fn print_tokens(tokens: Vec<Token>) {
     for token in tokens {
         print_token(token);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn basic_symbols() {
+        let tokens = Tokenizer::new().tokenize("()[]{},.;:".to_owned());
+        let expected_tokens: Vec<Token> = Vec::from(&[
+            Token::LParen,
+            Token::RParen,
+            Token::LBrace,
+            Token::RBrace,
+            Token::LCurly,
+            Token::RCurly,
+            Token::Comma,
+            Token::Dot,
+            Token::Semicolon,
+            Token::Colon,
+            Token::EOF,
+        ]);
+
+        assert_eq!(tokens, expected_tokens);
+    }
+
+    #[test]
+    fn operations() {
+        let tokens = Tokenizer::new().tokenize("+ += - -= * *= / /= % %=".to_owned());
+        let expected_tokens: Vec<Token> = Vec::from(&[
+            Token::Plus,
+            Token::PlusEqual,
+            Token::Minus,
+            Token::MinusEqual,
+            Token::Star,
+            Token::StarEqual,
+            Token::Slash,
+            Token::SlashEqual,
+            Token::Percent,
+            Token::PercentEqual,
+            Token::EOF,
+        ]);
+
+        assert_eq!(tokens, expected_tokens);
+    }
+
+    // TODO: like the rest of these lol
+    #[test]
+    fn bitwise() {
+        let tokens = Tokenizer::new().tokenize("+ += - -= * *= / /= % %=".to_owned());
     }
 }

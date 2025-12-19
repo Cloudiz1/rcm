@@ -1,5 +1,22 @@
-(* i dropped the commas cause theyre annoying :3 *)
-(* hey genius dot operator is a binary operator you moron *)
+program = { declaration }
+
+declaration = varDeclaration
+	| functionDeclaration
+	| structDeclaration
+	| enumDeclaration
+	| stmt;
+
+stmt = varDeclaration
+	| ifStmt
+	| whileStmt
+	| forStmt
+	| block;
+
+varDeclaration = ("let" | "const") identifier (":" type | [":" type] "=" expr) ";";
+ifStmt = "if" "(" expr ")" block;
+whileStmt = "while" "(" expr ")" block;
+forStmt = "for" "(" varDeclaration ";" expr ";" expr ")" block;
+block = { stmt }
 
 expr = logicalOR;
 logicalOR = logicalAND {'||' logicalAND};
@@ -10,8 +27,9 @@ bitshift = term { ( '<<' | '>>' ) term };
 term = factor { ( '+' | '-' ) factor };
 factor = unary { ( '*' | '/' | '%' ) unary };
 unary = ('!' | '-' | '&') (unary | postfix);
-postfix = primary {'.' identifier | '.*' | '[' expr ']' | '(' args ')' }; 
+postfix = primary {'.' identifier | '.*' | '[' expr ']' | '(' args ')' };
 primary = '(' expr ')' | primative;
 
 comparisonOperator = '>' | '>=' | '<' | '<=' | '==' | '!=';
-primative = NUMBER | STRING | CHARACTER | BOOL | NULL;
+primative = NUMBER | STRING | CHARACTER | BOOL | NULL | IDENTIFIER | TRUE | FALSE";
+
