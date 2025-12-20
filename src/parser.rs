@@ -1,7 +1,7 @@
 use crate::lexer;
 use std::vec::Vec;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Operator {
     Add,
     Subtract,
@@ -59,6 +59,10 @@ pub enum Expression {
         operator: Operator,
         rhs: Box<Expression>,
     },
+    Assignment {
+        identifier: String,
+        value: Box<Expression>,
+    },
 }
 
 #[derive(Debug)]
@@ -72,9 +76,14 @@ pub enum Statement {
         initial_value: Option<Box<Expression>>,
         is_constant: bool,
     },
-    VariableAssignment {
-        identifier: String,
-        value: Box<Expression>,
+    IfStatement {
+        condition: Box<Expression>,
+        block: Box<Statement>,
+        alt: Option<Box<Statement>>,
+    },
+    WhileStatement {
+        condition: Box<Expression>,
+        block: Box<Statement>,
     },
 }
 
@@ -164,35 +173,54 @@ impl Parser {
 
         self.advance();
     }
-
-    // #[cfg(feature = "debug")]
-    fn print_current(&self) {
-        println!("{:?}", self.current());
-    }
 }
 
+// statements
 impl Parser {
-    pub fn parse(&mut self, input: Vec<lexer::Token>) -> Statement {
-        self.input = input;
-
-        let mut program: Vec<Box<Statement>> = Vec::new();
-        while self.current() != lexer::Token::EOF {
-            program.push(Box::from(self.declaration()));
-        }
-
-        Statement::Program(program)
+    fn declaration(&mut self) -> Statement {
+        // match self.current() {
+        //     lexer::Token::Let | lexer::Token::Const => self.variable_declaration(),
+        //     _ => self.expression_statement();
+        // }
+        self.statement()
     }
 
-    fn declaration(&mut self) -> Statement {
-        if !self.match_advance(&[lexer::Token::Let, lexer::Token::Const]) {
-            return self.statement();
+    fn statement(&mut self) -> Statement {
+        match self.current() {
+            lexer::Token::LCurly => self.block(),
+            lexer::Token::Let | lexer::Token::Const => self.variable_declaration(),
+            lexer::Token::While => self.while_statement(),
+            lexer::Token::If => self.if_statement(),
+            _ => self.expression_statement(),
+        }
+    }
+
+    fn expression_statement(&mut self) -> Statement {
+        let out = Box::from(self.expression());
+        self.check_semicolon("expected semicolon after expression.");
+        Statement::ExpressionStatement(out)
+    }
+
+    fn block(&mut self) -> Statement {
+        let mut out: Vec<Box<Statement>> = Vec::new();
+        self.advance();
+        while self.current() != lexer::Token::RCurly {
+            out.push(Box::from(self.statement()));
         }
 
+        if self.consume() != lexer::Token::RCurly {
+            panic!("expected closing curly brace after the end of a block.");
+        }
+
+        Statement::Block(out)
+    }
+
+    fn variable_declaration(&mut self) -> Statement {
         let mut is_constant = false;
         let identifier: String;
         let mut variable_type: Option<String> = None;
         let mut initial_value: Option<Box<Expression>> = None;
-        if self.previous() == lexer::Token::Const {
+        if self.consume() == lexer::Token::Const {
             is_constant = true;
         }
 
@@ -231,13 +259,98 @@ impl Parser {
         };
     }
 
-    fn statement(&mut self) -> Statement {
-        let out = Statement::ExpressionStatement(Box::from(self.expression()));
-        self.check_semicolon("expected semicolon after expression statement");
-        return out;
+    fn while_statement(&mut self) -> Statement {
+        self.advance();
+        let condition = self.expression();
+        let block = self.block();
+        Statement::WhileStatement {
+            condition: Box::from(condition),
+            block: Box::from(block),
+        }
+    }
+
+    fn if_statement(&mut self) -> Statement {
+        self.advance(); // ignores the if token
+        let condition = self.expression();
+        let block = self.block();
+        let mut alt: Option<Box<Statement>> = None;
+
+        if self.current() == lexer::Token::Else {
+            self.advance();
+            if self.current() == lexer::Token::If {
+                alt = Some(Box::from(self.if_statement()));
+            } else {
+                alt = Some(Box::from(self.block()));
+            }
+        }
+
+        Statement::IfStatement {
+            condition: Box::from(condition),
+            block: Box::from(block),
+            alt,
+        }
+    }
+}
+
+// expressions
+impl Parser {
+    pub fn parse(&mut self, input: Vec<lexer::Token>) -> Statement {
+        self.input = input;
+
+        let mut program: Vec<Box<Statement>> = Vec::new();
+        while self.current() != lexer::Token::EOF {
+            program.push(Box::from(self.declaration()));
+        }
+
+        Statement::Program(program)
     }
 
     fn expression(&mut self) -> Expression {
+        self.assignment()
+    }
+
+    fn assignment(&mut self) -> Expression {
+        let operator = match self.peek() {
+            lexer::Token::Equal => Some(Operator::Equal),
+            lexer::Token::PlusEqual => Some(Operator::Add),
+            lexer::Token::MinusEqual => Some(Operator::Subtract),
+            lexer::Token::StarEqual => Some(Operator::Multiply),
+            lexer::Token::SlashEqual => Some(Operator::Divide),
+            lexer::Token::PercentEqual => Some(Operator::Modulus),
+            lexer::Token::PipeEqual => Some(Operator::BitwiseOr),
+            lexer::Token::AmpersandEqual => Some(Operator::BitwiseAnd),
+            lexer::Token::CaretEqual => Some(Operator::BitwiseXOr),
+            _ => None,
+        };
+
+        if let Some(unwrapped_operator) = operator {
+            let identifier = match self.consume() {
+                lexer::Token::Identifier(val) => val,
+                // TODO: yknow the drill...
+                _ => panic!("lhs is not an identifier."),
+            };
+
+            self.advance(); // skip the operator
+            let rhs = self.expression();
+
+            if unwrapped_operator == Operator::Equal {
+                return Expression::Assignment {
+                    identifier,
+                    value: Box::from(rhs),
+                };
+            } else {
+                let value = self.create_binary(
+                    Expression::Identifier(identifier.clone()),
+                    unwrapped_operator,
+                    rhs,
+                );
+                return Expression::Assignment {
+                    identifier,
+                    value: Box::from(value),
+                };
+            }
+        }
+
         self.logical_or()
     }
 
@@ -434,75 +547,8 @@ impl Parser {
                 expr
             }
             _ => {
-                println!("{:?}", token);
                 panic!("expected expression.");
             }
         }
-    }
-}
-
-#[cfg(feature = "debug")]
-fn print_operator(operator: Operator) {
-    match operator {
-        Operator::Add => print!("+"),
-        Operator::Subtract => print!("-"),
-        Operator::Multiply => print!("*"),
-        Operator::Divide => print!("/"),
-        Operator::Modulus => print!("%"),
-        Operator::BitwiseOr => print!("|"),
-        Operator::BitwiseAnd => print!("&"),
-        Operator::BitwiseXOr => print!("^"),
-        Operator::BitwiseLeftShift => print!("<<"),
-        Operator::BitwiseRightShift => print!(">>"),
-        Operator::Not => print!("!"),
-        Operator::Negate => print!("-"),
-        Operator::Or => print!("||"),
-        Operator::And => print!("&&"),
-        Operator::Equal => print!("=="),
-        Operator::NotEqual => print!("!="),
-        Operator::LessThan => print!("<"),
-        Operator::GreaterThan => print!(">"),
-        Operator::LessThanEqual => print!("<="),
-        Operator::GreaterThanEqual => print!(">="),
-        Operator::ArrayAccess => print!("[]"),
-        Operator::Reference => print!("&"),
-        Operator::Dereference => print!(".*"),
-        Operator::Assignment => print!("="),
-        Operator::Unimplemented => panic!("unimplemented operation."),
-    }
-}
-
-#[cfg(feature = "debug")]
-pub fn print_ast(input: Expression) {
-    match input {
-        Expression::Null => print!("NULL"),
-        Expression::Int(val) => print!("{val}"),
-        Expression::Float(val) => print!("{val}"),
-        Expression::Bool(val) => print!("{val}"),
-        Expression::String(val) => print!("{val}"),
-        Expression::Binary { lhs, operator, rhs } => {
-            print!("(");
-            print_operator(operator);
-            print!(" ");
-            print_ast(*lhs);
-            print!(" ");
-            print_ast(*rhs);
-            print!(")");
-        }
-        Expression::Unary { operator, rhs } => {
-            print!("(");
-            print_operator(operator);
-            print!(" ");
-            print_ast(*rhs);
-            print!(")");
-        }
-        Expression::Postfix { lhs, operator } => {
-            print!("(");
-            print_operator(operator);
-            print!(" ");
-            print_ast(*lhs);
-            print!(")");
-        }
-        _ => panic!("unimplemented AST print"),
     }
 }

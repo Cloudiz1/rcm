@@ -1,23 +1,24 @@
 program = { declaration }
 
-declaration = varDeclaration
-	| functionDeclaration
+declaration = stmt 
+	| functionDefinition
 	| structDeclaration
-	| enumDeclaration
-	| stmt;
+	| enumDeclaration;
 
-stmt = varDeclaration
+stmt = exprStmt
+	| varDeclaration
 	| ifStmt
 	| whileStmt
 	| forStmt
 	| block;
 
 varDeclaration = ("let" | "const") identifier (":" type | [":" type] "=" expr) ";";
-ifStmt = "if" "(" expr ")" block;
-whileStmt = "while" "(" expr ")" block;
-forStmt = "for" "(" varDeclaration ";" expr ";" expr ")" block;
-block = { stmt }
+ifStmt = "if" expr block ["else" (ifStmt | block)];
+whileStmt = "while" expr block;
+// forStmt = "for" "(" varDeclaration ";" expr ";" expr ")" block;
+block = "{" {stmt} "}"
 
+assignment = identifier ("=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "^=" | "|=" | "<<=" | ">>=") expr;
 expr = logicalOR;
 logicalOR = logicalAND {'||' logicalAND};
 logicalAND = comparison {'&&' comparison};

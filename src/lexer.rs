@@ -140,16 +140,8 @@ impl Tokenizer {
         tokenizer
     }
 
-    fn at_end(&self) -> bool {
-        if self.i >= self.input.len() {
-            return true;
-        }
-
-        return false;
-    }
-
     fn peek(&self) -> Option<char> {
-        if self.at_end() {
+        if self.i >= self.input.len() - 1 {
             return None;
         }
 
@@ -273,7 +265,6 @@ impl Tokenizer {
             self.advance();
         }
 
-        // self.advance();
         if let Some(keyword) = self.keywords.get(&out) {
             return Some(keyword.clone());
         }
@@ -440,7 +431,7 @@ mod tests {
     #[test]
     fn basic_symbols() {
         let tokens = Tokenizer::new().tokenize("()[]{},.;:".to_owned());
-        let expected_tokens: Vec<Token> = Vec::from(&[
+        let expected_tokens = Vec::from(&[
             Token::LParen,
             Token::RParen,
             Token::LBrace,
@@ -460,7 +451,7 @@ mod tests {
     #[test]
     fn operations() {
         let tokens = Tokenizer::new().tokenize("+ += - -= * *= / /= % %=".to_owned());
-        let expected_tokens: Vec<Token> = Vec::from(&[
+        let expected_tokens = Vec::from(&[
             Token::Plus,
             Token::PlusEqual,
             Token::Minus,
@@ -477,9 +468,62 @@ mod tests {
         assert_eq!(tokens, expected_tokens);
     }
 
-    // TODO: like the rest of these lol
     #[test]
     fn bitwise() {
-        let tokens = Tokenizer::new().tokenize("+ += - -= * *= / /= % %=".to_owned());
+        let tokens = Tokenizer::new().tokenize("& &= | |= ^ ^= << <<= >> >>=".to_owned());
+        let expected_tokens = Vec::from(&[
+            Token::Ampersand,
+            Token::AmpersandEqual,
+            Token::Pipe,
+            Token::PipeEqual,
+            Token::Caret,
+            Token::CaretEqual,
+            Token::DoubleLeftCaret,
+            Token::DoubleLeftCaretEqual,
+            Token::DoubleRightCaret,
+            Token::DoubleRightCaretEqual,
+            Token::EOF,
+        ]);
+
+        assert_eq!(tokens, expected_tokens);
+    }
+
+    #[test]
+    fn logical() {
+        let tokens = Tokenizer::new().tokenize("|| &&".to_owned());
+        let expected_tokens = Vec::from(&[Token::DoublePipe, Token::DoubleAmpersand, Token::EOF]);
+        assert_eq!(tokens, expected_tokens);
+    }
+
+    #[test]
+    fn literals() {
+        let tokens = Tokenizer::new().tokenize("\"Hello, world!\" 42 67.41".to_owned());
+        let expected_tokens = Vec::from(&[
+            Token::StringLit("Hello, world!".to_owned()),
+            Token::IntLit(42),
+            Token::FloatLit(67.41),
+            Token::EOF,
+        ]);
+        assert_eq!(tokens, expected_tokens);
+    }
+
+    #[test]
+    fn variable_declaration() {
+        let tokens = Tokenizer::new().tokenize("let foo: i32 = 1 + 2 * 3;".to_owned());
+        let expected_tokens = Vec::from(&[
+            Token::Let,
+            Token::Identifier("foo".to_owned()),
+            Token::Colon,
+            Token::Identifier("i32".to_owned()),
+            Token::Equal,
+            Token::IntLit(1),
+            Token::Plus,
+            Token::IntLit(2),
+            Token::Star,
+            Token::IntLit(3),
+            Token::Semicolon,
+            Token::EOF,
+        ]);
+        assert_eq!(tokens, expected_tokens);
     }
 }

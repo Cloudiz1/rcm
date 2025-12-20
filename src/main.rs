@@ -20,5 +20,5 @@ fn main() {
     let mut parser = parser::Parser::new();
     let ast = parser.parse(tokens);
 
-    println!("{:?}", ast);
+    println!("{:#?}", ast);
 }
