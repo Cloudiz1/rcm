@@ -30,6 +30,7 @@ pub enum Operator {
     ArrayAccess,
     Reference,
     Dereference,
+    Dot,
 
     Assignment,
 
@@ -48,7 +49,7 @@ pub enum Expression {
     Bool(bool),
     Unary {
         operator: Operator,
-        rhs: Box<Expression>,
+        member: Box<Expression>,
     },
     Postfix {
         lhs: Box<Expression>,
@@ -63,6 +64,14 @@ pub enum Expression {
         identifier: String,
         value: Box<Expression>,
     },
+    FunctionCall {
+        identifier: String,
+        args: Vec<Box<Expression>>,
+    },
+    ArrayAccess {
+        identifier: String,
+        index: Box<Expression>,
+    },
 }
 
 #[derive(Debug)]
@@ -75,6 +84,10 @@ pub enum Statement {
         variable_type: Option<String>,
         initial_value: Option<Box<Expression>>,
         is_constant: bool,
+    },
+    EnumDeclaration {
+        identifier: String,
+        varients: Vec<String>,
     },
     IfStatement {
         condition: Box<Expression>,
@@ -146,23 +159,16 @@ impl Parser {
 
     fn create_binary(&self, lhs: Expression, operator: Operator, rhs: Expression) -> Expression {
         Expression::Binary {
-            lhs: Box::from(lhs),
+            lhs: Box::new(lhs),
             operator,
-            rhs: Box::from(rhs),
+            rhs: Box::new(rhs),
         }
     }
 
-    fn create_unary(&self, operator: Operator, rhs: Expression) -> Expression {
+    fn create_unary(&self, operator: Operator, member: Expression) -> Expression {
         Expression::Unary {
             operator,
-            rhs: Box::from(rhs),
-        }
-    }
-
-    fn create_postfix(&self, lhs: Expression, operator: Operator) -> Expression {
-        Expression::Postfix {
-            lhs: Box::from(lhs),
-            operator,
+            member: Box::new(member),
         }
     }
 
@@ -178,10 +184,23 @@ impl Parser {
 // statements
 impl Parser {
     fn declaration(&mut self) -> Statement {
-        // match self.current() {
-        //     lexer::Token::Let | lexer::Token::Const => self.variable_declaration(),
-        //     _ => self.expression_statement();
-        // }
+        match self.current() {
+            lexer::Token::Fn => self.function_declaration(),
+            lexer::Token::Struct => self.struct_declaration(),
+            lexer::Token::Enum => self.enum_declaration(),
+            _ => self.statement(),
+        }
+    }
+
+    fn function_declaration(&mut self) -> Statement {
+        self.statement()
+    }
+
+    fn struct_declaration(&mut self) -> Statement {
+        self.statement()
+    }
+
+    fn enum_declaration(&mut self) -> Statement {
         self.statement()
     }
 
@@ -196,7 +215,7 @@ impl Parser {
     }
 
     fn expression_statement(&mut self) -> Statement {
-        let out = Box::from(self.expression());
+        let out = Box::new(self.expression());
         self.check_semicolon("expected semicolon after expression.");
         Statement::ExpressionStatement(out)
     }
@@ -205,7 +224,7 @@ impl Parser {
         let mut out: Vec<Box<Statement>> = Vec::new();
         self.advance();
         while self.current() != lexer::Token::RCurly {
-            out.push(Box::from(self.statement()));
+            out.push(Box::new(self.statement()));
         }
 
         if self.consume() != lexer::Token::RCurly {
@@ -247,7 +266,7 @@ impl Parser {
         }
 
         if self.match_advance(&[lexer::Token::Equal]) {
-            initial_value = Some(Box::from(self.expression()));
+            initial_value = Some(Box::new(self.expression()));
         }
 
         self.check_semicolon("expected semicolon after variable declaration.");
@@ -264,8 +283,8 @@ impl Parser {
         let condition = self.expression();
         let block = self.block();
         Statement::WhileStatement {
-            condition: Box::from(condition),
-            block: Box::from(block),
+            condition: Box::new(condition),
+            block: Box::new(block),
         }
     }
 
@@ -278,15 +297,15 @@ impl Parser {
         if self.current() == lexer::Token::Else {
             self.advance();
             if self.current() == lexer::Token::If {
-                alt = Some(Box::from(self.if_statement()));
+                alt = Some(Box::new(self.if_statement()));
             } else {
-                alt = Some(Box::from(self.block()));
+                alt = Some(Box::new(self.block()));
             }
         }
 
         Statement::IfStatement {
-            condition: Box::from(condition),
-            block: Box::from(block),
+            condition: Box::new(condition),
+            block: Box::new(block),
             alt,
         }
     }
@@ -299,7 +318,7 @@ impl Parser {
 
         let mut program: Vec<Box<Statement>> = Vec::new();
         while self.current() != lexer::Token::EOF {
-            program.push(Box::from(self.declaration()));
+            program.push(Box::new(self.declaration()));
         }
 
         Statement::Program(program)
@@ -320,6 +339,8 @@ impl Parser {
             lexer::Token::PipeEqual => Some(Operator::BitwiseOr),
             lexer::Token::AmpersandEqual => Some(Operator::BitwiseAnd),
             lexer::Token::CaretEqual => Some(Operator::BitwiseXOr),
+            lexer::Token::DoubleLeftCaret => Some(Operator::BitwiseLeftShift),
+            lexer::Token::DoubleRightCaret => Some(Operator::BitwiseRightShift),
             _ => None,
         };
 
@@ -336,7 +357,7 @@ impl Parser {
             if unwrapped_operator == Operator::Equal {
                 return Expression::Assignment {
                     identifier,
-                    value: Box::from(rhs),
+                    value: Box::new(rhs),
                 };
             } else {
                 let value = self.create_binary(
@@ -346,7 +367,7 @@ impl Parser {
                 );
                 return Expression::Assignment {
                     identifier,
-                    value: Box::from(value),
+                    value: Box::new(value),
                 };
             }
         }
@@ -507,30 +528,64 @@ impl Parser {
 
     // TODO: this needs like crazy work
     fn postfix(&mut self) -> Expression {
-        let mut expr = self.primary();
+        match self.peek() {
+            lexer::Token::DotStar => {
+                let expr = self.primary();
+                self.advance(); // consume operator
+                self.create_unary(Operator::Dereference, expr)
+            }
+            lexer::Token::Dot => {
+                let lhs = self.primary();
+                self.advance();
+                let rhs = self.primary();
+                self.create_binary(lhs, Operator::Dot, rhs)
+            }
+            lexer::Token::LParen => {
+                match self.primary() {
+                    Expression::Identifier(identifier) => {
+                        self.advance(); // consume LParen
+                        let mut args: Vec<Box<Expression>> = Vec::new();
 
-        while self.match_advance(&[
-            lexer::Token::DotStar,
-            lexer::Token::LParen,
-            lexer::Token::LBrace,
-        ]) {
-            let operator = match self.previous() {
-                lexer::Token::DotStar => Operator::Dereference,
-                lexer::Token::LParen => Operator::Unimplemented, // function call
-                lexer::Token::LBrace => Operator::ArrayAccess,
-                _ => panic!(""),
-            };
+                        loop {
+                            args.push(Box::new(self.expression()));
+                            if self.current() == lexer::Token::Comma {
+                                self.advance(); // consume comma
+                                continue;
+                            }
 
-            expr = self.create_postfix(expr, operator);
+                            if self.current() == lexer::Token::RParen {
+                                self.advance();
+                                return Expression::FunctionCall { identifier, args };
+                            }
+
+                            panic!("expected comma or closing parenthesis.");
+                        }
+                    }
+                    _ => self.primary(),
+                }
+            }
+            lexer::Token::LBrace => {
+                match self.primary() {
+                    Expression::Identifier(identifier) => {
+                        self.advance(); // consume LBrace
+                        let index = Box::new(self.expression());
+                        if self.current() != lexer::Token::RBrace {
+                            panic!("expected closing bracket for array acesss.");
+                        }
+
+                        self.advance(); // consume RBrace
+                        Expression::ArrayAccess { identifier, index }
+                    }
+                    _ => self.primary(), // TODO: lowkey might be able to just panic?
+                                         // not sure why else you would have a LBrace
+                }
+            }
+            _ => self.primary(),
         }
-
-        return expr;
     }
 
     fn primary(&mut self) -> Expression {
-        let token = self.consume();
-
-        match token {
+        match self.consume() {
             lexer::Token::IntLit(val) => Expression::Int(val),
             lexer::Token::FloatLit(val) => Expression::Float(val),
             lexer::Token::Bool(val) => Expression::Bool(val),

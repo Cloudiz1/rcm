@@ -22,6 +22,8 @@ pub enum Token {
     Const,
     Fn,
     Pub,
+    Struct,
+    Enum,
 
     If,
     Else,
@@ -109,6 +111,10 @@ impl Tokenizer {
             .insert(String::from("const"), Token::Const);
         tokenizer.keywords.insert(String::from("pub"), Token::Pub);
         tokenizer.keywords.insert(String::from("fn"), Token::Fn);
+        tokenizer.keywords.insert(String::from("enum"), Token::Enum);
+        tokenizer
+            .keywords
+            .insert(String::from("struct"), Token::Struct);
         tokenizer.keywords.insert(String::from("if"), Token::If);
         tokenizer.keywords.insert(String::from("else"), Token::Else);
         tokenizer
@@ -412,12 +418,10 @@ impl Tokenizer {
     }
 }
 
-#[cfg(feature = "debug")]
 pub fn print_token(token: Token) {
     println!("{:?}", token);
 }
 
-#[cfg(feature = "debug")]
 pub fn print_tokens(tokens: Vec<Token>) {
     for token in tokens {
         print_token(token);

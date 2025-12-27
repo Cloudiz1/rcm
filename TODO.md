@@ -28,4 +28,4 @@ Expressions:
 
 all of error handling
 environments
-
+deciding on a for loop syntax might also be good!
