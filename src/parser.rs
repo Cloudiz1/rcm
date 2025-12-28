@@ -183,9 +183,6 @@ impl Parser {
         return true;
     }
 
-    /*
-     * consumes token
-     */
     fn unwrap_identifier(&mut self, i: Expression, msg: &str) -> String {
         match i {
             Expression::Identifier(identifier) => identifier,
@@ -206,6 +203,15 @@ impl Parser {
     }
 
     fn function_declaration(&mut self) -> Statement {
+        self.advance(); // consume fn token
+        let expected_identifier = self.primary();
+        self.unwrap_identifier(
+            expected_identifier,
+            "expected function name in after keyword 'fn'",
+        );
+
+        self.expect(lexer::Token::LParen, "expected '(' after function name.");
+
         self.statement()
     }
 
