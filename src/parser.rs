@@ -86,8 +86,22 @@ pub enum Statement {
         is_constant: bool,
     },
     EnumDeclaration {
-        identifier: String,
+        name: String,
         varients: Vec<String>,
+    },
+    Parameter {
+        name: String,
+        t: String,
+    },
+    Return {
+        value: Box<Expression>,
+    },
+    FunctionDeclaration {
+        name: String,
+        return_type: String,
+        parameters: Vec<Box<Statement>>, // vec of params
+        body: Box<Statement>,
+        public: bool,
     },
     IfStatement {
         condition: Box<Expression>,
@@ -195,7 +209,7 @@ impl Parser {
 impl Parser {
     fn declaration(&mut self) -> Statement {
         match self.current() {
-            lexer::Token::Fn => self.function_declaration(),
+            lexer::Token::Pub | lexer::Token::Fn => self.function_declaration(),
             lexer::Token::Struct => self.struct_declaration(),
             lexer::Token::Enum => self.enum_declaration(),
             _ => self.statement(),
@@ -203,16 +217,68 @@ impl Parser {
     }
 
     fn function_declaration(&mut self) -> Statement {
-        self.advance(); // consume fn token
-        let expected_identifier = self.primary();
-        self.unwrap_identifier(
-            expected_identifier,
-            "expected function name in after keyword 'fn'",
-        );
+        let mut public = false;
+        if self.current() == lexer::Token::Pub {
+            self.advance();
+            public = true;
+        }
 
+        self.advance(); // consume fn token
+        let mut identifier = self.primary();
+        let name =
+            self.unwrap_identifier(identifier, "expected function name in after keyword 'fn'");
+
+        lexer::print_token(self.current());
         self.expect(lexer::Token::LParen, "expected '(' after function name.");
 
-        self.statement()
+        let mut parameters: Vec<Box<Statement>> = Vec::new();
+        while self.current() != lexer::Token::RParen {
+            lexer::print_token(self.current());
+            identifier = self.primary();
+            let param_name = self.unwrap_identifier(
+                identifier,
+                "expected parameter name in function declaration.",
+            );
+
+            self.expect(lexer::Token::Colon, "expected colon after parameter name.");
+
+            identifier = self.primary();
+            let param_type =
+                self.unwrap_identifier(identifier, "expected type following parameter name.");
+            parameters.push(Box::new(Statement::Parameter {
+                name: param_name,
+                t: param_type,
+            }));
+
+            if self.current() == lexer::Token::Comma {
+                self.advance();
+                continue;
+            }
+
+            match self.current() {
+                lexer::Token::Identifier(_) => panic!("missing comma between function parameters."),
+                _ => {}
+            }
+        }
+
+        self.advance(); // consume RParen
+
+        let return_type = match self.current() {
+            lexer::Token::Identifier(identifier) => {
+                self.advance();
+                identifier
+            }
+            _ => "void".to_owned(),
+        };
+
+        let body = Box::new(self.block());
+        Statement::FunctionDeclaration {
+            name,
+            return_type,
+            parameters,
+            body,
+            public,
+        }
     }
 
     fn struct_declaration(&mut self) -> Statement {
@@ -221,14 +287,14 @@ impl Parser {
 
     fn enum_declaration(&mut self) -> Statement {
         self.advance(); // consume enum token
-        let mut expr = self.primary();
-        let identifier = self.unwrap_identifier(expr, "expected identifier in enum declaration.");
+        let mut identifier = self.primary();
+        let name = self.unwrap_identifier(identifier, "expected identifier in enum declaration.");
 
         let mut varients: Vec<String> = Vec::new();
         self.expect(lexer::Token::LCurly, "expected body in enum declaration.");
         while self.current() != lexer::Token::RCurly {
-            expr = self.primary();
-            varients.push(self.unwrap_identifier(expr, "expected varient in enum body."));
+            identifier = self.primary();
+            varients.push(self.unwrap_identifier(identifier, "expected varient in enum body."));
 
             let token = self.current();
             if token != lexer::Token::Comma && token != lexer::Token::RCurly {
@@ -246,10 +312,7 @@ impl Parser {
             "expected semicolon after enum declaration.",
         );
 
-        Statement::EnumDeclaration {
-            identifier,
-            varients,
-        }
+        Statement::EnumDeclaration { name, varients }
     }
 
     fn statement(&mut self) -> Statement {
@@ -258,17 +321,9 @@ impl Parser {
             lexer::Token::Let | lexer::Token::Const => self.variable_declaration(),
             lexer::Token::While => self.while_statement(),
             lexer::Token::If => self.if_statement(),
+            lexer::Token::Return => self.return_statement(),
             _ => self.expression_statement(),
         }
-    }
-
-    fn expression_statement(&mut self) -> Statement {
-        let out = Box::new(self.expression());
-        self.expect(
-            lexer::Token::Semicolon,
-            "expected semicolon after expression",
-        );
-        Statement::ExpressionStatement(out)
     }
 
     fn block(&mut self) -> Statement {
@@ -350,6 +405,27 @@ impl Parser {
             block: Box::new(block),
             alt,
         }
+    }
+
+    fn return_statement(&mut self) -> Statement {
+        self.advance(); // consume return token
+        let expression = self.expression();
+        self.expect(
+            lexer::Token::Semicolon,
+            "expected semicolon after return statement.",
+        );
+        Statement::Return {
+            value: Box::new(expression),
+        }
+    }
+
+    fn expression_statement(&mut self) -> Statement {
+        let out = Box::new(self.expression());
+        self.expect(
+            lexer::Token::Semicolon,
+            "expected semicolon after expression",
+        );
+        Statement::ExpressionStatement(out)
     }
 }
 
