@@ -172,12 +172,25 @@ impl Parser {
         }
     }
 
-    fn check_semicolon(&mut self, msg: &str) {
-        if self.current() != lexer::Token::Semicolon {
+    /*
+     * consumes token
+     */
+    fn expect(&mut self, token: lexer::Token, msg: &str) -> bool {
+        if self.consume() != token {
             panic!("{msg}");
         }
 
-        self.advance();
+        return true;
+    }
+
+    /*
+     * consumes token
+     */
+    fn unwrap_identifier(&mut self, i: Expression, msg: &str) -> String {
+        match i {
+            Expression::Identifier(identifier) => identifier,
+            _ => panic!("{msg}"),
+        }
     }
 }
 
@@ -201,7 +214,36 @@ impl Parser {
     }
 
     fn enum_declaration(&mut self) -> Statement {
-        self.statement()
+        self.advance(); // consume enum token
+        let mut expr = self.primary();
+        let identifier = self.unwrap_identifier(expr, "expected identifier in enum declaration.");
+
+        let mut varients: Vec<String> = Vec::new();
+        self.expect(lexer::Token::LCurly, "expected body in enum declaration.");
+        while self.current() != lexer::Token::RCurly {
+            expr = self.primary();
+            varients.push(self.unwrap_identifier(expr, "expected varient in enum body."));
+
+            let token = self.current();
+            if token != lexer::Token::Comma && token != lexer::Token::RCurly {
+                panic!("expected comma seperating enum varients.");
+            }
+
+            if token == lexer::Token::Comma {
+                self.advance();
+            }
+        }
+
+        self.advance(); // consume RCurly
+        self.expect(
+            lexer::Token::Semicolon,
+            "expected semicolon after enum declaration.",
+        );
+
+        Statement::EnumDeclaration {
+            identifier,
+            varients,
+        }
     }
 
     fn statement(&mut self) -> Statement {
@@ -216,7 +258,10 @@ impl Parser {
 
     fn expression_statement(&mut self) -> Statement {
         let out = Box::new(self.expression());
-        self.check_semicolon("expected semicolon after expression.");
+        self.expect(
+            lexer::Token::Semicolon,
+            "expected semicolon after expression",
+        );
         Statement::ExpressionStatement(out)
     }
 
@@ -227,49 +272,40 @@ impl Parser {
             out.push(Box::new(self.statement()));
         }
 
-        if self.consume() != lexer::Token::RCurly {
-            panic!("expected closing curly brace after the end of a block.");
-        }
+        self.expect(
+            lexer::Token::RCurly,
+            "expected closing curly brace after the end of a block.",
+        );
 
         Statement::Block(out)
     }
 
     fn variable_declaration(&mut self) -> Statement {
         let mut is_constant = false;
-        let identifier: String;
         let mut variable_type: Option<String> = None;
         let mut initial_value: Option<Box<Expression>> = None;
         if self.consume() == lexer::Token::Const {
             is_constant = true;
         }
 
-        match self.consume() {
-            lexer::Token::Identifier(val) => {
-                identifier = val;
-            }
-            _ => {
-                // TODO: of course better error handling later on
-                panic!("expected identifier after variable declaration.");
-            }
-        };
+        let mut expr = self.primary();
+        let identifier =
+            self.unwrap_identifier(expr, "expected identifier after variable declaration.");
 
         if self.match_advance(&[lexer::Token::Colon]) {
-            match self.consume() {
-                lexer::Token::Identifier(val) => {
-                    variable_type = Some(val);
-                }
-                _ => {
-                    // TODO: of course better error handling later on
-                    panic!("expected type after semicolon.");
-                }
-            };
+            expr = self.primary();
+            variable_type = Some(self.unwrap_identifier(expr, "expected type after semicolon."));
         }
 
         if self.match_advance(&[lexer::Token::Equal]) {
             initial_value = Some(Box::new(self.expression()));
         }
 
-        self.check_semicolon("expected semicolon after variable declaration.");
+        self.expect(
+            lexer::Token::Semicolon,
+            "expected semicolon after variable declaration.",
+        );
+
         return Statement::VariableDeclaration {
             identifier,
             variable_type,
@@ -345,11 +381,9 @@ impl Parser {
         };
 
         if let Some(unwrapped_operator) = operator {
-            let identifier = match self.consume() {
-                lexer::Token::Identifier(val) => val,
-                // TODO: yknow the drill...
-                _ => panic!("lhs is not an identifier."),
-            };
+            let expected_identifier = self.primary();
+            let identifier =
+                self.unwrap_identifier(expected_identifier, "lhs is not an identifier");
 
             self.advance(); // skip the operator
             let rhs = self.expression();
@@ -526,7 +560,7 @@ impl Parser {
         self.postfix()
     }
 
-    // TODO: this needs like crazy work
+    // TODO: struct construction
     fn postfix(&mut self) -> Expression {
         match self.peek() {
             lexer::Token::DotStar => {
@@ -565,20 +599,20 @@ impl Parser {
                 }
             }
             lexer::Token::LBrace => {
-                match self.primary() {
-                    Expression::Identifier(identifier) => {
-                        self.advance(); // consume LBrace
-                        let index = Box::new(self.expression());
-                        if self.current() != lexer::Token::RBrace {
-                            panic!("expected closing bracket for array acesss.");
-                        }
+                let expected_identifier = self.primary();
+                let identifier = self.unwrap_identifier(
+                    expected_identifier,
+                    "expected identifier before array access.",
+                );
 
-                        self.advance(); // consume RBrace
-                        Expression::ArrayAccess { identifier, index }
-                    }
-                    _ => self.primary(), // TODO: lowkey might be able to just panic?
-                                         // not sure why else you would have a LBrace
+                self.advance(); // consume LBrace
+                let index = Box::new(self.expression());
+                if self.current() != lexer::Token::RBrace {
+                    panic!("expected closing bracket for array acesss.");
                 }
+
+                self.advance(); // consume RBrace
+                Expression::ArrayAccess { identifier, index }
             }
             _ => self.primary(),
         }
@@ -593,12 +627,11 @@ impl Parser {
             lexer::Token::Identifier(val) => Expression::Identifier(val),
             lexer::Token::LParen => {
                 let expr = self.expression();
-                if self.current() != lexer::Token::RParen {
-                    panic!("expected closing ')' after expression.");
-                }
+                self.expect(
+                    lexer::Token::RParen,
+                    "expected closing ')' after expression.",
+                );
 
-                // ignores RParen
-                _ = self.consume();
                 expr
             }
             _ => {

@@ -10,14 +10,15 @@ Expressions:
 - terms (done)
 - factors (done)
 - unary (done)
-- postfix 
+- postfix (done)
+	- struct constructor
 - primary (done)
 
 ### Declarations:
 - variable declaration (done)
 - function declaration
 - struct declaration
-- enum declaration
+- enum declaration (done)
 
 ### Statements:
 - if statements (done)

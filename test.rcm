@@ -1,2 +1,4 @@
-foo(1, 2, 3);
-bar[1 + 2];
+let foo: i32 = (1 + 2) * 3;
+const bar = "hello, world!";
+print(bar);
+array[1 + 2 * 3];
