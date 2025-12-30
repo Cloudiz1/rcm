@@ -65,11 +65,11 @@ pub enum Expression {
         value: Box<Expression>,
     },
     FunctionCall {
-        identifier: String,
+        identifier: Box<Expression>, // in case i want function pointers or closures (foo())()
         args: Vec<Box<Expression>>,
     },
     ArrayAccess {
-        identifier: String,
+        identifier: Box<Expression>, // to support foo[0][0]
         index: Box<Expression>,
     },
 }
@@ -88,6 +88,7 @@ pub enum Statement {
     EnumDeclaration {
         name: String,
         varients: Vec<String>,
+        public: bool,
     },
     Parameter {
         name: String,
@@ -101,6 +102,17 @@ pub enum Statement {
         return_type: String,
         parameters: Vec<Box<Statement>>, // vec of params
         body: Box<Statement>,
+        public: bool,
+    },
+    Member {
+        name: String,
+        t: String,
+        public: bool,
+    },
+    StructDeclaration {
+        name: String,
+        members: Vec<Box<Statement>>, // vec of memebrs
+        methods: Vec<Box<Statement>>, // vec of function decs.
         public: bool,
     },
     IfStatement {
@@ -161,9 +173,13 @@ impl Parser {
         self.previous()
     }
 
+    fn token_match(&self, tokens: &[lexer::Token]) -> bool {
+        tokens.contains(&self.current())
+    }
+
     // matches current and advances if true
     fn match_advance(&mut self, tokens: &[lexer::Token]) -> bool {
-        if tokens.contains(&self.current()) {
+        if self.token_match(tokens) {
             self.i += 1;
             return true;
         }
@@ -203,13 +219,29 @@ impl Parser {
             _ => panic!("{msg}"),
         }
     }
+
+    fn is_public(&mut self) -> bool {
+        if self.i == 0 {
+            return false;
+        }
+
+        self.previous() == lexer::Token::Pub
+    }
+
+    fn print(&self) {
+        lexer::print_token(self.current());
+    }
 }
 
 // statements
 impl Parser {
     fn declaration(&mut self) -> Statement {
+        if self.current() == lexer::Token::Pub {
+            self.advance();
+        }
+
         match self.current() {
-            lexer::Token::Pub | lexer::Token::Fn => self.function_declaration(),
+            lexer::Token::Fn => self.function_declaration(),
             lexer::Token::Struct => self.struct_declaration(),
             lexer::Token::Enum => self.enum_declaration(),
             _ => self.statement(),
@@ -217,23 +249,17 @@ impl Parser {
     }
 
     fn function_declaration(&mut self) -> Statement {
-        let mut public = false;
-        if self.current() == lexer::Token::Pub {
-            self.advance();
-            public = true;
-        }
+        let public = self.is_public();
 
         self.advance(); // consume fn token
         let mut identifier = self.primary();
         let name =
             self.unwrap_identifier(identifier, "expected function name in after keyword 'fn'");
 
-        lexer::print_token(self.current());
         self.expect(lexer::Token::LParen, "expected '(' after function name.");
 
         let mut parameters: Vec<Box<Statement>> = Vec::new();
         while self.current() != lexer::Token::RParen {
-            lexer::print_token(self.current());
             identifier = self.primary();
             let param_name = self.unwrap_identifier(
                 identifier,
@@ -263,6 +289,7 @@ impl Parser {
 
         self.advance(); // consume RParen
 
+        self.print();
         let return_type = match self.current() {
             lexer::Token::Identifier(identifier) => {
                 self.advance();
@@ -281,11 +308,94 @@ impl Parser {
         }
     }
 
+    // TODO: Currently allows zero-sized structs, not sure if i want this or not
     fn struct_declaration(&mut self) -> Statement {
-        self.statement()
+        let struct_public = self.is_public();
+        self.advance(); // consume struct token
+
+        let identifier = self.primary();
+        let struct_name =
+            self.unwrap_identifier(identifier, "expected struct name after struct keyword.");
+        self.expect(lexer::Token::LCurly, "expected body of struct.");
+
+        let mut members: Vec<Box<Statement>> = Vec::new();
+        loop {
+            if self.current() == lexer::Token::Pub {
+                self.advance();
+                continue;
+            }
+
+            match self.current() {
+                lexer::Token::Identifier(identifier) => {
+                    let public: bool = self.is_public();
+                    self.advance(); // consume the identifier
+                    self.expect(
+                        lexer::Token::Colon,
+                        "expected colon following member declaration",
+                    );
+                    let member_type = self.primary();
+                    let t = self.unwrap_identifier(
+                        member_type,
+                        "expected type following member declaration",
+                    );
+
+                    match self.current() {
+                        lexer::Token::Identifier(_) => {
+                            panic!("expected comma between member declarations")
+                        }
+                        _ => {}
+                    }
+
+                    if self.current() == lexer::Token::Comma {
+                        self.advance();
+                    }
+
+                    members.push(Box::new(Statement::Member {
+                        name: identifier,
+                        t,
+                        public,
+                    }));
+                }
+                _ => break,
+            };
+        }
+
+        let mut methods: Vec<Box<Statement>> = Vec::new();
+        loop {
+            if self.current() == lexer::Token::Pub {
+                self.advance();
+                continue;
+            }
+
+            if self.current() == lexer::Token::Fn {
+                methods.push(Box::new(self.function_declaration()));
+            } else {
+                break;
+            }
+        }
+
+        match self.current() {
+            lexer::Token::Pub | lexer::Token::Identifier(_) => {
+                panic!("member declarations must go before methods.")
+            }
+            _ => {}
+        }
+
+        self.expect(
+            lexer::Token::RCurly,
+            "expected closing brace on struct declaration.",
+        );
+
+        Statement::StructDeclaration {
+            name: struct_name,
+            members,
+            methods,
+            public: struct_public,
+        }
     }
 
     fn enum_declaration(&mut self) -> Statement {
+        let public = self.is_public();
         self.advance(); // consume enum token
         let mut identifier = self.primary();
         let name = self.unwrap_identifier(identifier, "expected identifier in enum declaration.");
@@ -307,12 +417,12 @@ impl Parser {
         }
 
         self.advance(); // consume RCurly
-        self.expect(
-            lexer::Token::Semicolon,
-            "expected semicolon after enum declaration.",
-        );
 
-        Statement::EnumDeclaration { name, varients }
+        Statement::EnumDeclaration {
+            name,
+            varients,
+            public,
+        }
     }
 
     fn statement(&mut self) -> Statement {
@@ -531,7 +641,7 @@ impl Parser {
                 lexer::Token::RightCaretEqual => Operator::GreaterThanEqual,
                 lexer::Token::EqualEqual => Operator::Equal,
                 lexer::Token::BangEqual => Operator::NotEqual,
-                _ => panic!(""),
+                _ => unreachable!(),
             };
 
             let rhs = self.bitwise();
@@ -553,7 +663,7 @@ impl Parser {
                 lexer::Token::Ampersand => Operator::BitwiseAnd,
                 lexer::Token::Pipe => Operator::BitwiseOr,
                 lexer::Token::Caret => Operator::BitwiseXOr,
-                _ => panic!(""),
+                _ => unreachable!(),
             };
 
             let rhs = self.bitshift();
@@ -573,7 +683,7 @@ impl Parser {
             let operator = match self.previous() {
                 lexer::Token::DoubleLeftCaret => Operator::BitwiseLeftShift,
                 lexer::Token::DoubleRightCaret => Operator::BitwiseRightShift,
-                _ => panic!(""),
+                _ => unreachable!(),
             };
 
             let rhs = self.term();
@@ -590,7 +700,7 @@ impl Parser {
             let operator = match self.previous() {
                 lexer::Token::Plus => Operator::Add,
                 lexer::Token::Minus => Operator::Subtract,
-                _ => panic!(""),
+                _ => unreachable!(),
             };
 
             let rhs = self.factor();
@@ -612,7 +722,7 @@ impl Parser {
                 lexer::Token::Star => Operator::Multiply,
                 lexer::Token::Slash => Operator::Divide,
                 lexer::Token::Percent => Operator::Modulus,
-                _ => panic!(""),
+                _ => unreachable!(),
             };
 
             let rhs = self.unary();
@@ -632,7 +742,7 @@ impl Parser {
                 lexer::Token::Bang => Operator::Not,
                 lexer::Token::Minus => Operator::Negate,
                 lexer::Token::Ampersand => Operator::Reference,
-                _ => panic!(""),
+                _ => unreachable!(),
             };
 
             let rhs = self.unary();
@@ -643,61 +753,71 @@ impl Parser {
     }
 
     // TODO: struct construction
+    // lowkey make it a different precedence
     fn postfix(&mut self) -> Expression {
-        match self.peek() {
-            lexer::Token::DotStar => {
-                let expr = self.primary();
-                self.advance(); // consume operator
-                self.create_unary(Operator::Dereference, expr)
-            }
-            lexer::Token::Dot => {
-                let lhs = self.primary();
-                self.advance();
-                let rhs = self.primary();
-                self.create_binary(lhs, Operator::Dot, rhs)
-            }
-            lexer::Token::LParen => {
-                match self.primary() {
-                    Expression::Identifier(identifier) => {
-                        self.advance(); // consume LParen
-                        let mut args: Vec<Box<Expression>> = Vec::new();
+        let mut expr = self.primary();
+        while self.token_match(&[
+            lexer::Token::DotStar,
+            lexer::Token::Dot,
+            lexer::Token::LParen,
+            lexer::Token::LBrace,
+            lexer::Token::LCurly,
+        ]) {
+            expr = match self.current() {
+                lexer::Token::DotStar => {
+                    self.advance(); // consume operator
+                    self.create_unary(Operator::Dereference, expr)
+                }
+                lexer::Token::Dot => {
+                    self.advance();
+                    let rhs = self.primary();
+                    self.create_binary(expr, Operator::Dot, rhs)
+                }
+                lexer::Token::LParen => {
+                    self.advance(); // consume LParen
 
-                        loop {
-                            args.push(Box::new(self.expression()));
-                            if self.current() == lexer::Token::Comma {
-                                self.advance(); // consume comma
-                                continue;
-                            }
-
-                            if self.current() == lexer::Token::RParen {
-                                self.advance();
-                                return Expression::FunctionCall { identifier, args };
-                            }
-
-                            panic!("expected comma or closing parenthesis.");
+                    let mut args: Vec<Box<Expression>> = Vec::new();
+                    while self.current() != lexer::Token::RParen {
+                        args.push(Box::new(self.expression()));
+                        if self.current() == lexer::Token::Comma {
+                            self.advance();
+                            continue;
                         }
+
+                        if self.current() != lexer::Token::RParen {
+                            panic!("expected comma seperating arguments or closing parenthesis.");
+                        }
+
+                        break;
                     }
-                    _ => self.primary(),
-                }
-            }
-            lexer::Token::LBrace => {
-                let expected_identifier = self.primary();
-                let identifier = self.unwrap_identifier(
-                    expected_identifier,
-                    "expected identifier before array access.",
-                );
 
-                self.advance(); // consume LBrace
-                let index = Box::new(self.expression());
-                if self.current() != lexer::Token::RBrace {
-                    panic!("expected closing bracket for array acesss.");
+                    self.advance(); // consume RParen
+                    Expression::FunctionCall {
+                        identifier: Box::new(expr),
+                        args,
+                    }
                 }
+                lexer::Token::LBrace => {
+                    self.advance(); // consume LBrace
+                    let index = Box::new(self.expression());
+                    self.expect(
+                        lexer::Token::RBrace,
+                        "expected closing bracket for array access.",
+                    );
 
-                self.advance(); // consume RBrace
-                Expression::ArrayAccess { identifier, index }
+                    Expression::ArrayAccess {
+                        identifier: Box::new(expr),
+                        index,
+                    }
+                }
+                lexer::Token::LCurly => {
+                    todo!()
+                }
+                _ => unreachable!(),
             }
-            _ => self.primary(),
         }
+
+        return expr;
     }
 
     fn primary(&mut self) -> Expression {
@@ -714,7 +834,7 @@ impl Parser {
                     "expected closing ')' after expression.",
                 );
 
-                expr
+                return expr;
             }
             _ => {
                 panic!("expected expression.");

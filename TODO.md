@@ -16,8 +16,11 @@ Expressions:
 
 ### Declarations:
 - variable declaration (done)
-- function declaration
-- struct declaration
+	- havent supported like arrays at all...
+- function declaration (done)
+	- function pointers!
+	- lambdas
+- struct declaration (done)
 - enum declaration (done)
 
 ### Statements:

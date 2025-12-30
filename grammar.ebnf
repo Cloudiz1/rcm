@@ -14,7 +14,14 @@ stmt = exprStmt
 
 varDeclaration = ("let" | "const") identifier (":" type | [":" type] "=" expr) ";";
 functionDeclaration = ["pub"] "fn" identifier "(" { identifier ":" type "," } [identifier ":" type] ")" [type] block;
-enumDeclaration = "enum" identifier "{" {identifier ","} [identifier [","]] "}";
+enumDeclaration = ["pub"] enum" identifier "{" {identifier ","} [identifier [","]] "}";
+
+structDeclaration = ["pub"] struct" identifier "{"
+	{ ["pub"] identifier ":" type [","] }
+	{ functionDeclaration }
+"}" ";";
+
+exprStmt = expr ";";
 ifStmt = "if" expr block ["else" (ifStmt | block)];
 whileStmt = "while" expr block;
 // forStmt = "for" "(" varDeclaration ";" expr ";" expr ")" block;
@@ -34,5 +41,5 @@ postfix = primary {'.' identifier | '.*' | '[' expr ']' | '(' args ')' };
 primary = '(' expr ')' | primative;
 
 comparisonOperator = '>' | '>=' | '<' | '<=' | '==' | '!=';
-primative = NUMBER | STRING | CHARACTER | BOOL | NULL | IDENTIFIER | TRUE | FALSE";
+primative = NUMBER | STRING | CHARACTER | BOOL | NULL | IDENTIFIER | TRUE | FALSE;
 
