@@ -1,12 +1,10 @@
-struct S {
-	i: usize,
-	input: String,
-
-	pub fn index() char {
-		return self.input[i];
-	}
-
-	fn remove() {
-		self.input.remove(i);
-	}
+let x: *i32 = 3;
+if foo < 3 {
+	x = 4;
+} else if foo < 5 {
+	x = 5;
+} else if foo < 6 {
+	x = 6;
+} else {
+	x = 7;
 }

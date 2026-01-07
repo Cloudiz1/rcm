@@ -1,7 +1,8 @@
 use crate::lexer;
+use std::collections::HashMap;
 use std::vec::Vec;
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Operator {
     Add,
     Subtract,
@@ -37,7 +38,32 @@ pub enum Operator {
     Unimplemented,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+pub enum Type {
+    Pointer(Box<Type>),
+    Array { t: Box<Type>, size: Box<Expression> },
+    Struct(String),
+    Enum(String),
+    I8,
+    U8,
+    I16,
+    U16,
+    I32,
+    U32,
+    I64,
+    U64,
+    Isize,
+    Usize,
+    F16,
+    F32,
+    F64,
+    Bool,
+    Void,
+    Str,
+    Char,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expression {
     // expressions
     Null,
@@ -69,7 +95,7 @@ pub enum Expression {
         args: Vec<Box<Expression>>,
     },
     ArrayAccess {
-        identifier: Box<Expression>, // to support foo[0][0]
+        identifier: Box<Expression>, // TODO: support foo[0][0]
         index: Box<Expression>,
     },
 }
@@ -81,7 +107,7 @@ pub enum Statement {
     Block(Vec<Box<Statement>>),
     VariableDeclaration {
         identifier: String,
-        variable_type: Option<String>,
+        variable_type: Option<Type>,
         initial_value: Option<Box<Expression>>,
         is_constant: bool,
     },
@@ -92,26 +118,26 @@ pub enum Statement {
     },
     Parameter {
         name: String,
-        t: String,
+        t: Type,
     },
     Return {
         value: Box<Expression>,
     },
     FunctionDeclaration {
         name: String,
-        return_type: String,
+        return_type: Type,
         parameters: Vec<Box<Statement>>, // vec of params
         body: Box<Statement>,
         public: bool,
     },
     Member {
         name: String,
-        t: String,
+        t: Type,
         public: bool,
     },
     StructDeclaration {
         name: String,
-        members: Vec<Box<Statement>>, // vec of memebrs
+        members: Vec<Box<Statement>>, // vec of members
         methods: Vec<Box<Statement>>, // vec of function decs.
         public: bool,
     },
@@ -129,14 +155,35 @@ pub enum Statement {
 pub struct Parser {
     input: Vec<lexer::Token>,
     i: usize,
+    types: HashMap<String, Type>,
 }
 
 // helpers
 impl Parser {
     pub fn new() -> Self {
+        let mut types: HashMap<String, Type> = HashMap::new();
+        types.insert("i8".to_owned(), Type::I8);
+        types.insert("u8".to_owned(), Type::U8);
+        types.insert("i16".to_owned(), Type::I16);
+        types.insert("u16".to_owned(), Type::U16);
+        types.insert("i32".to_owned(), Type::I32);
+        types.insert("u32".to_owned(), Type::U32);
+        types.insert("i64".to_owned(), Type::I64);
+        types.insert("u64".to_owned(), Type::U64);
+        types.insert("isize".to_owned(), Type::Isize);
+        types.insert("usize".to_owned(), Type::Usize);
+        types.insert("f16".to_owned(), Type::F16);
+        types.insert("f32".to_owned(), Type::F32);
+        types.insert("f64".to_owned(), Type::F64);
+        types.insert("bool".to_owned(), Type::Bool);
+        types.insert("void".to_owned(), Type::Void);
+        types.insert("string".to_owned(), Type::Str);
+        types.insert("char".to_owned(), Type::Char);
+
         Self {
             input: Vec::new(),
             i: 0,
+            types,
         }
     }
 
@@ -228,6 +275,39 @@ impl Parser {
         self.previous() == lexer::Token::Pub
     }
 
+    fn parse_type(&mut self) -> Type {
+        match self.current() {
+            // TODO: this quick implementation has a lot left to be desired
+            // id like to have an implicit size, let foo: [_]u8 = {'a', 'b', 'c'}, for example
+            // id like to have a slice type as well, fn foo(input: []u8) should be valid
+            // its probably worth it to have strings as just char * and chars as u8s
+            // but in the same vein a non null terminated string seems nice
+            lexer::Token::LBrace => {
+                self.advance(); // consume LBrace
+                let size = self.term();
+                self.expect(lexer::Token::RBrace, "expected closing brace.");
+                Type::Array {
+                    t: Box::new(self.parse_type()),
+                    size: Box::new(size),
+                }
+            }
+            lexer::Token::Star => {
+                self.advance(); // consumes the star
+                Type::Pointer(Box::new(self.parse_type()))
+            }
+            lexer::Token::Identifier(identifier) => {
+                self.advance();
+                if let Some(t) = self.types.get(&identifier) {
+                    return t.clone();
+                }
+
+                println!("{:?}", identifier);
+                panic!("unrecognized type.");
+            }
+            _ => panic!("expected type."),
+        }
+    }
+
     fn print(&self) {
         lexer::print_token(self.current());
     }
@@ -268,9 +348,10 @@ impl Parser {
 
             self.expect(lexer::Token::Colon, "expected colon after parameter name.");
 
-            identifier = self.primary();
-            let param_type =
-                self.unwrap_identifier(identifier, "expected type following parameter name.");
+            let param_type = self.parse_type();
+            // identifier = self.primary();
+            // let param_type =
+            //     self.unwrap_identifier(identifier, "expected type following parameter name.");
             parameters.push(Box::new(Statement::Parameter {
                 name: param_name,
                 t: param_type,
@@ -287,16 +368,16 @@ impl Parser {
             }
         }
 
-        self.advance(); // consume RParen
+        self.expect(lexer::Token::RParen, "expected right paren");
 
-        self.print();
-        let return_type = match self.current() {
-            lexer::Token::Identifier(identifier) => {
-                self.advance();
-                identifier
-            }
-            _ => "void".to_owned(),
-        };
+        let return_type = self.parse_type();
+        // let return_type = match self.current() {
+        //     lexer::Token::Identifier(identifier) => {
+        //         self.advance();
+        //         identifier
+        //     }
+        //     _ => "void".to_owned(),
+        // };
 
         let body = Box::new(self.block());
         Statement::FunctionDeclaration {
@@ -318,6 +399,9 @@ impl Parser {
             self.unwrap_identifier(identifier, "expected struct name after struct keyword.");
         self.expect(lexer::Token::LCurly, "expected body of struct.");
 
+        self.types
+            .insert(struct_name.clone(), Type::Struct(struct_name.clone()));
+
         let mut members: Vec<Box<Statement>> = Vec::new();
         loop {
             if self.current() == lexer::Token::Pub {
@@ -333,11 +417,13 @@ impl Parser {
                         lexer::Token::Colon,
                         "expected colon following member declaration",
                     );
-                    let member_type = self.primary();
-                    let t = self.unwrap_identifier(
-                        member_type,
-                        "expected type following member declaration",
-                    );
+
+                    let t = self.parse_type();
+                    // let member_type = self.primary();
+                    // let t = self.unwrap_identifier(
+                    //     member_type,
+                    //     "expected type following member declaration",
+                    // );
 
                     match self.current() {
                         lexer::Token::Identifier(_) => {
@@ -399,6 +485,7 @@ impl Parser {
         self.advance(); // consume enum token
         let mut identifier = self.primary();
         let name = self.unwrap_identifier(identifier, "expected identifier in enum declaration.");
+        self.types.insert(name.clone(), Type::Enum(name.clone()));
 
         let mut varients: Vec<String> = Vec::new();
         self.expect(lexer::Token::LCurly, "expected body in enum declaration.");
@@ -416,13 +503,51 @@ impl Parser {
             }
         }
 
-        self.advance(); // consume RCurly
+        self.expect(
+            lexer::Token::RCurly,
+            "expected closing right curly after enum declaration.",
+        );
 
         Statement::EnumDeclaration {
             name,
             varients,
             public,
         }
+    }
+
+    fn variable_declaration(&mut self) -> Statement {
+        let mut is_constant = false;
+        let mut variable_type: Option<Type> = None;
+        let mut initial_value: Option<Box<Expression>> = None;
+        if self.consume() == lexer::Token::Const {
+            is_constant = true;
+        }
+
+        let expr = self.primary();
+        let identifier =
+            self.unwrap_identifier(expr, "expected identifier after variable declaration.");
+
+        if self.match_advance(&[lexer::Token::Colon]) {
+            variable_type = Some(self.parse_type());
+            // expr = self.primary();
+            // variable_type = Some(self.unwrap_identifier(expr, "expected type after colon."));
+        }
+
+        if self.match_advance(&[lexer::Token::Equal]) {
+            initial_value = Some(Box::new(self.expression()));
+        }
+
+        self.expect(
+            lexer::Token::Semicolon,
+            "expected semicolon after variable declaration.",
+        );
+
+        return Statement::VariableDeclaration {
+            identifier,
+            variable_type,
+            initial_value,
+            is_constant,
+        };
     }
 
     fn statement(&mut self) -> Statement {
@@ -449,40 +574,6 @@ impl Parser {
         );
 
         Statement::Block(out)
-    }
-
-    fn variable_declaration(&mut self) -> Statement {
-        let mut is_constant = false;
-        let mut variable_type: Option<String> = None;
-        let mut initial_value: Option<Box<Expression>> = None;
-        if self.consume() == lexer::Token::Const {
-            is_constant = true;
-        }
-
-        let mut expr = self.primary();
-        let identifier =
-            self.unwrap_identifier(expr, "expected identifier after variable declaration.");
-
-        if self.match_advance(&[lexer::Token::Colon]) {
-            expr = self.primary();
-            variable_type = Some(self.unwrap_identifier(expr, "expected type after semicolon."));
-        }
-
-        if self.match_advance(&[lexer::Token::Equal]) {
-            initial_value = Some(Box::new(self.expression()));
-        }
-
-        self.expect(
-            lexer::Token::Semicolon,
-            "expected semicolon after variable declaration.",
-        );
-
-        return Statement::VariableDeclaration {
-            identifier,
-            variable_type,
-            initial_value,
-            is_constant,
-        };
     }
 
     fn while_statement(&mut self) -> Statement {
@@ -761,7 +852,7 @@ impl Parser {
             lexer::Token::Dot,
             lexer::Token::LParen,
             lexer::Token::LBrace,
-            lexer::Token::LCurly,
+            // lexer::Token::LCurly,
         ]) {
             expr = match self.current() {
                 lexer::Token::DotStar => {
@@ -810,9 +901,9 @@ impl Parser {
                         index,
                     }
                 }
-                lexer::Token::LCurly => {
-                    todo!()
-                }
+                // lexer::Token::LCurly => {
+                //     todo!()
+                // }
                 _ => unreachable!(),
             }
         }
@@ -821,7 +912,8 @@ impl Parser {
     }
 
     fn primary(&mut self) -> Expression {
-        match self.consume() {
+        let token = self.consume();
+        match token {
             lexer::Token::IntLit(val) => Expression::Int(val),
             lexer::Token::FloatLit(val) => Expression::Float(val),
             lexer::Token::Bool(val) => Expression::Bool(val),
@@ -837,6 +929,7 @@ impl Parser {
                 return expr;
             }
             _ => {
+                println!("found: {:?}", token);
                 panic!("expected expression.");
             }
         }

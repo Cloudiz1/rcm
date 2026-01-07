@@ -3,23 +3,25 @@ program = { declaration }
 declaration = stmt 
 	| functionDeclaration 
 	| structDeclaration
-	| enumDeclaration;
+	| enumDeclaration ;
 
 stmt = exprStmt
 	| varDeclaration
 	| ifStmt
 	| whileStmt
 	| forStmt
-	| block;
+	| block ;
 
-varDeclaration = ("let" | "const") identifier (":" type | [":" type] "=" expr) ";";
-functionDeclaration = ["pub"] "fn" identifier "(" { identifier ":" type "," } [identifier ":" type] ")" [type] block;
-enumDeclaration = ["pub"] enum" identifier "{" {identifier ","} [identifier [","]] "}";
+varDeclaration = ("let" | "const") identifier (":" type | [":" type] "=" expr) ";" ;
+functionDeclaration = ["pub"] "fn" identifier "(" { identifier ":" type "," } [identifier ":" type] ")" type block ;
+enumDeclaration = ["pub"] "enum" identifier "{" {identifier ","} [identifier [","]] "}" ;
 
 structDeclaration = ["pub"] struct" identifier "{"
 	{ ["pub"] identifier ":" type [","] }
 	{ functionDeclaration }
-"}" ";";
+"}" ";" ;
+
+type = {"*"} {"[" expr "]"} {"*"} (identifier) ; // expr should be a constant known at compile time
 
 exprStmt = expr ";";
 ifStmt = "if" expr block ["else" (ifStmt | block)];

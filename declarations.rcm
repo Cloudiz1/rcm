@@ -1,0 +1,36 @@
+enum EToken {
+	Number, 
+	Plus,
+	Minus,
+	Star,
+	Slash,
+	Equal,
+}
+
+struct Token {
+	type: EToken,
+	val: i32,
+}
+
+struct Lexer {
+	i: i32,
+	input: string,
+
+	pub fn new(input: string) Lexer {
+		// struct constructors currently do not exist!
+		// return Lexer {
+		// 	i: 0,
+		// 	input: input
+		// }
+	}
+
+	pub fn print(self: *Lexer) void {
+		print(self.i);
+	}
+}
+
+pub fn main() void {
+	const input = "print(\"hello, world!\")";
+	let lexer: Lexer = Lexer.new(input);
+	lexer.print();
+}
