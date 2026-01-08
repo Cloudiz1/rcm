@@ -98,6 +98,14 @@ pub enum Expression {
         identifier: Box<Expression>, // TODO: support foo[0][0]
         index: Box<Expression>,
     },
+    StructMember {
+        identifier: String,
+        val: Box<Expression>,
+    },
+    StructConstructor {
+        identifier: String,
+        members: Vec<Box<Expression>>, // struct members
+    },
 }
 
 #[derive(Debug)]
@@ -254,6 +262,10 @@ impl Parser {
      */
     fn expect(&mut self, token: lexer::Token, msg: &str) -> bool {
         if self.consume() != token {
+            print!("found: ");
+            self.print();
+            self.advance();
+            self.print();
             panic!("{msg}");
         }
 
@@ -349,9 +361,6 @@ impl Parser {
             self.expect(lexer::Token::Colon, "expected colon after parameter name.");
 
             let param_type = self.parse_type();
-            // identifier = self.primary();
-            // let param_type =
-            //     self.unwrap_identifier(identifier, "expected type following parameter name.");
             parameters.push(Box::new(Statement::Parameter {
                 name: param_name,
                 t: param_type,
@@ -371,13 +380,6 @@ impl Parser {
         self.expect(lexer::Token::RParen, "expected right paren");
 
         let return_type = self.parse_type();
-        // let return_type = match self.current() {
-        //     lexer::Token::Identifier(identifier) => {
-        //         self.advance();
-        //         identifier
-        //     }
-        //     _ => "void".to_owned(),
-        // };
 
         let body = Box::new(self.block());
         Statement::FunctionDeclaration {
@@ -403,6 +405,7 @@ impl Parser {
             .insert(struct_name.clone(), Type::Struct(struct_name.clone()));
 
         let mut members: Vec<Box<Statement>> = Vec::new();
+        let mut comma: bool = true;
         loop {
             if self.current() == lexer::Token::Pub {
                 self.advance();
@@ -411,6 +414,10 @@ impl Parser {
 
             match self.current() {
                 lexer::Token::Identifier(identifier) => {
+                    if !comma {
+                        panic!("expected comma between member declarations");
+                    }
+
                     let public: bool = self.is_public();
                     self.advance(); // consume the identifier
                     self.expect(
@@ -419,20 +426,10 @@ impl Parser {
                     );
 
                     let t = self.parse_type();
-                    // let member_type = self.primary();
-                    // let t = self.unwrap_identifier(
-                    //     member_type,
-                    //     "expected type following member declaration",
-                    // );
 
-                    match self.current() {
-                        lexer::Token::Identifier(_) => {
-                            panic!("expected comma between member declarations")
-                        }
-                        _ => {}
-                    }
-
+                    comma = false;
                     if self.current() == lexer::Token::Comma {
+                        comma = true;
                         self.advance();
                     }
 
@@ -840,11 +837,59 @@ impl Parser {
             return self.create_unary(operator, rhs);
         }
 
-        self.postfix()
+        self.struct_constructor()
     }
 
-    // TODO: struct construction
-    // lowkey make it a different precedence
+    fn struct_constructor(&mut self) -> Expression {
+        let mut expr = self.postfix();
+
+        match expr.clone() {
+            Expression::Identifier(identifier) => {
+                let mut members: Vec<Box<Expression>> = Vec::new();
+                let mut comma: bool = true;
+
+                if self.current() == lexer::Token::LCurly {
+                    self.advance();
+
+                    while self.current() != lexer::Token::RCurly {
+                        if !comma {
+                            panic!("expected comma seperating member values in struct constructor");
+                        }
+
+                        let member_identifier = self.primary();
+                        let member_name = self.unwrap_identifier(
+                            member_identifier,
+                            "expected identifier in struct constructor.",
+                        );
+
+                        self.expect(lexer::Token::Colon, "expected colon in struct constructor");
+                        let val = Box::new(self.expression());
+
+                        comma = false;
+                        if self.current() == lexer::Token::Comma {
+                            self.advance();
+                            comma = true;
+                        }
+
+                        members.push(Box::new(Expression::StructMember {
+                            identifier: member_name,
+                            val,
+                        }));
+                    }
+                    self.advance(); // consume RParen
+
+                    expr = Expression::StructConstructor {
+                        identifier,
+                        members,
+                    };
+                }
+            }
+            _ => {}
+        }
+
+        return expr;
+    }
+
     fn postfix(&mut self) -> Expression {
         let mut expr = self.primary();
         while self.token_match(&[
@@ -852,7 +897,6 @@ impl Parser {
             lexer::Token::Dot,
             lexer::Token::LParen,
             lexer::Token::LBrace,
-            // lexer::Token::LCurly,
         ]) {
             expr = match self.current() {
                 lexer::Token::DotStar => {
@@ -901,9 +945,6 @@ impl Parser {
                         index,
                     }
                 }
-                // lexer::Token::LCurly => {
-                //     todo!()
-                // }
                 _ => unreachable!(),
             }
         }

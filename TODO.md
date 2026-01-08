@@ -12,11 +12,12 @@ Expressions:
 - factors (done)
 - unary (done)
 - postfix (done)
-	- struct constructor (should be extrapolated to its own precedence)
+- struct constructor (done)
 - primary (done)
 
 ### Declarations:
-- types (done)
+- types (mostly done)
+	- array types are strange atm
 	- unless i want to support structs being declared at the bottom being able to be used anywhere
 	- would require another pass but should work out well if i decide to add a preprocessor too
 - variable declaration (done)

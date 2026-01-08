@@ -1,10 +1,11 @@
-let x: *i32 = 3;
-if foo < 3 {
-	x = 4;
-} else if foo < 5 {
-	x = 5;
-} else if foo < 6 {
-	x = 6;
-} else {
-	x = 7;
+struct foo {
+	bar: i32,
+	baz: string,
+}
+
+pub fn main() void {
+	foo {
+		bar: 1 + 2 * 3,
+		baz: "Hello, world!",
+	};
 }

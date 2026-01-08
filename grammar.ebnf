@@ -17,7 +17,8 @@ functionDeclaration = ["pub"] "fn" identifier "(" { identifier ":" type "," } [i
 enumDeclaration = ["pub"] "enum" identifier "{" {identifier ","} [identifier [","]] "}" ;
 
 structDeclaration = ["pub"] struct" identifier "{"
-	{ ["pub"] identifier ":" type [","] }
+	{ ["pub"] identifier ":" type "," }
+	[ ["pub"] identifier ":" type ]
 	{ functionDeclaration }
 "}" ";" ;
 
@@ -38,7 +39,11 @@ bitwise = bitshift { ('&' | '|' | '^') bitshift };
 bitshift = term { ( '<<' | '>>' ) term };
 term = factor { ( '+' | '-' ) factor };
 factor = unary { ( '*' | '/' | '%' ) unary };
-unary = ('!' | '-' | '&') (unary | postfix);
+unary = ('!' | '-' | '&') (unary | structConstructor);
+structConstructor = ( identifier "{"
+	{ identifier ":" expr "," }
+	[ identifier ":" expr ]
+"}" ) | postfix;
 postfix = primary {'.' identifier | '.*' | '[' expr ']' | '(' args ')' };
 primary = '(' expr ')' | primative;
 
