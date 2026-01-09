@@ -1,4 +1,4 @@
-enum EToken {
+pub enum EToken {
 	Number, 
 	Plus,
 	Minus,
@@ -30,7 +30,7 @@ struct Lexer {
 }
 
 pub fn main() void {
-	const input = "print(\"hello, world!\")";
+	const input = print("hello, world!");
 	let lexer: Lexer = Lexer.new(input);
 	lexer.print();
 }

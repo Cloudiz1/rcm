@@ -15,10 +15,10 @@ fn main() {
     let mut tokenizer = lexer::Tokenizer::new();
     let tokens = tokenizer.tokenize(src);
 
-    // lexer::print_tokens(tokens.clone());
+    lexer::print_tokens(tokens.clone());
 
     let mut parser = parser::Parser::new();
-    let ast = parser.parse(tokens);
-
-    println!("{:#?}", ast);
+    if let Some(ast) = parser.parse(tokens) {
+        // println!("{:#?}", ast);
+    }
 }

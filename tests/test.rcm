@@ -1,0 +1,16 @@
+struct Car {
+	mileage: i32,
+	brand: string,
+
+	pub fn new() Car {}
+
+	pub fn drive(self: *Car, miles: i32) void {
+		self.milage += miles;
+	} 
+}
+
+pub fn main() void {
+	// let car = Car.new();
+	Car.new();
+	car.drive();
+}

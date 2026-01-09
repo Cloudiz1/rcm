@@ -110,6 +110,7 @@ pub enum Expression {
 
 #[derive(Debug)]
 pub enum Statement {
+    ParseError, // uesd for panic mode
     Program(Vec<Box<Statement>>),
     ExpressionStatement(Box<Expression>),
     Block(Vec<Box<Statement>>),
@@ -161,9 +162,10 @@ pub enum Statement {
 }
 
 pub struct Parser {
-    input: Vec<lexer::Token>,
+    input: Vec<lexer::DebugToken>,
     i: usize,
     types: HashMap<String, Type>,
+    // panic: bool,
 }
 
 // helpers
@@ -199,33 +201,45 @@ impl Parser {
         self.i += 1;
     }
 
+    fn at_end(&self) -> bool {
+        self.i >= self.input.len()
+    }
+
     fn previous(&self) -> lexer::Token {
         if self.i == 0 {
-            panic!("self.previous() called on index 0.");
+            panic!("Parser.previous() called on index 0.");
         }
 
-        self.input[self.i - 1].clone()
+        self.input[self.i - 1].token_type.clone()
     }
 
     fn current(&self) -> lexer::Token {
-        if self.i >= self.input.len() {
-            panic!("self.current() tried to access out of bounds index.");
+        if self.at_end() {
+            panic!("Parser.current() tried to access out of bounds index.");
         }
 
-        self.input[self.i].clone()
+        self.input[self.i].token_type.clone()
     }
 
     fn peek(&self) -> lexer::Token {
         if self.i >= self.input.len() - 1 {
-            panic!("self.peek() tried to access out of bounds index.");
+            panic!("Parser.peek() tried to access out of bounds index.");
         }
 
-        self.input[self.i + 1].clone()
+        self.input[self.i + 1].token_type.clone()
     }
 
     fn consume(&mut self) -> lexer::Token {
         self.i += 1;
         self.previous()
+    }
+
+    fn get_debug_token(&self) -> lexer::DebugToken {
+        if self.i == 0 {
+            return self.input[0].clone();
+        }
+
+        self.input[self.i - 1].clone()
     }
 
     fn token_match(&self, tokens: &[lexer::Token]) -> bool {
@@ -257,25 +271,34 @@ impl Parser {
         }
     }
 
+    fn handle_error(&self, error: bool, expected_statement: Statement) -> Statement {
+        if error {
+            return Statement::ParseError;
+        }
+
+        return expected_statement;
+    }
+
     /*
      * consumes token
      */
     fn expect(&mut self, token: lexer::Token, msg: &str) -> bool {
-        if self.consume() != token {
-            print!("found: ");
-            self.print();
+        if !self.at_end() && self.current() == token {
             self.advance();
-            self.print();
-            panic!("{msg}");
+            return true;
         }
 
-        return true;
+        self.error(msg);
+        return false;
     }
 
     fn unwrap_identifier(&mut self, i: Expression, msg: &str) -> String {
         match i {
             Expression::Identifier(identifier) => identifier,
-            _ => panic!("{msg}"),
+            _ => {
+                self.error(msg);
+                return "".to_owned();
+            }
         }
     }
 
@@ -297,7 +320,10 @@ impl Parser {
             lexer::Token::LBrace => {
                 self.advance(); // consume LBrace
                 let size = self.term();
-                self.expect(lexer::Token::RBrace, "expected closing brace.");
+                if !self.expect(lexer::Token::RBrace, "expected closing brace.") {
+                    return Type::Void;
+                }
+
                 Type::Array {
                     t: Box::new(self.parse_type()),
                     size: Box::new(size),
@@ -313,15 +339,60 @@ impl Parser {
                     return t.clone();
                 }
 
-                println!("{:?}", identifier);
-                panic!("unrecognized type.");
+                self.error("unrecognized type.");
+                return Type::Void;
             }
-            _ => panic!("expected type."),
+            _ => {
+                self.error("expected type.");
+                return Type::Void;
+            }
         }
     }
 
-    fn print(&self) {
-        lexer::print_token(self.current());
+    fn print(&self, msg: &str) {
+        println!("{}: {:?}", msg, self.current());
+    }
+}
+
+// panic mode
+impl Parser {
+    // TODO: you shouldnt actually report errors in panic mode after the initial one
+    // you should only sync after the declaration is done
+    fn error(&mut self, msg: &str) -> Statement {
+        let token = self.get_debug_token();
+        println!(
+            "{} | at token \"{:?}\": {} ",
+            token.line, token.token_type, msg
+        );
+
+        self.synchronize();
+        return Statement::ParseError;
+    }
+
+    fn synchronize(&mut self) {
+        while !self.at_end() {
+            match self.current() {
+                lexer::Token::Semicolon => {
+                    self.advance();
+                    return;
+                }
+                lexer::Token::Pub
+                | lexer::Token::Fn
+                | lexer::Token::Struct
+                | lexer::Token::Enum
+                | lexer::Token::If
+                | lexer::Token::Else
+                | lexer::Token::For
+                | lexer::Token::While
+                | lexer::Token::Return
+                | lexer::Token::RCurly => {
+                    return;
+                }
+                _ => {}
+            }
+
+            self.advance();
+        }
     }
 }
 
@@ -372,12 +443,14 @@ impl Parser {
             }
 
             match self.current() {
-                lexer::Token::Identifier(_) => panic!("missing comma between function parameters."),
+                lexer::Token::Identifier(_) => {
+                    self.error("missing comma between function parameters.");
+                }
                 _ => {}
             }
         }
 
-        self.expect(lexer::Token::RParen, "expected right paren");
+        self.expect(lexer::Token::RParen, "expected ')'");
 
         let return_type = self.parse_type();
 
@@ -399,7 +472,10 @@ impl Parser {
         let identifier = self.primary();
         let struct_name =
             self.unwrap_identifier(identifier, "expected struct name after struct keyword.");
-        self.expect(lexer::Token::LCurly, "expected body of struct.");
+
+        if !self.expect(lexer::Token::LCurly, "expected body of struct.") {
+            return Statement::ParseError;
+        }
 
         self.types
             .insert(struct_name.clone(), Type::Struct(struct_name.clone()));
@@ -415,14 +491,14 @@ impl Parser {
             match self.current() {
                 lexer::Token::Identifier(identifier) => {
                     if !comma {
-                        panic!("expected comma between member declarations");
+                        self.error("expected comma between member declarations");
                     }
 
                     let public: bool = self.is_public();
                     self.advance(); // consume the identifier
                     self.expect(
                         lexer::Token::Colon,
-                        "expected colon following member declaration",
+                        "expected colon folllowing member declaration",
                     );
 
                     let t = self.parse_type();
@@ -459,14 +535,14 @@ impl Parser {
 
         match self.current() {
             lexer::Token::Pub | lexer::Token::Identifier(_) => {
-                panic!("member declarations must go before methods.")
+                self.error("member declarations must go before methods.");
             }
             _ => {}
         }
 
         self.expect(
             lexer::Token::RCurly,
-            "expected closing brace on struct declaration.",
+            "expected closing curly on struct declaration.",
         );
 
         Statement::StructDeclaration {
@@ -485,14 +561,18 @@ impl Parser {
         self.types.insert(name.clone(), Type::Enum(name.clone()));
 
         let mut varients: Vec<String> = Vec::new();
-        self.expect(lexer::Token::LCurly, "expected body in enum declaration.");
+
+        if !self.expect(lexer::Token::LCurly, "expected body in enum declaration.") {
+            return Statement::ParseError;
+        }
+
         while self.current() != lexer::Token::RCurly {
             identifier = self.primary();
             varients.push(self.unwrap_identifier(identifier, "expected varient in enum body."));
 
             let token = self.current();
             if token != lexer::Token::Comma && token != lexer::Token::RCurly {
-                panic!("expected comma seperating enum varients.");
+                self.error("expected comma seperating enum varients.");
             }
 
             if token == lexer::Token::Comma {
@@ -526,8 +606,6 @@ impl Parser {
 
         if self.match_advance(&[lexer::Token::Colon]) {
             variable_type = Some(self.parse_type());
-            // expr = self.primary();
-            // variable_type = Some(self.unwrap_identifier(expr, "expected type after colon."));
         }
 
         if self.match_advance(&[lexer::Token::Equal]) {
@@ -612,38 +690,39 @@ impl Parser {
             lexer::Token::Semicolon,
             "expected semicolon after return statement.",
         );
+
         Statement::Return {
             value: Box::new(expression),
         }
     }
 
     fn expression_statement(&mut self) -> Statement {
-        let out = Box::new(self.expression());
-        self.expect(
-            lexer::Token::Semicolon,
-            "expected semicolon after expression",
-        );
-        Statement::ExpressionStatement(out)
+        let out = Statement::ExpressionStatement(Box::new(self.expression()));
+        self.expect(lexer::Token::Semicolon, "expected semicolon.");
+        return out;
     }
 }
 
 // expressions
 impl Parser {
-    pub fn parse(&mut self, input: Vec<lexer::Token>) -> Statement {
+    pub fn parse(&mut self, input: Vec<lexer::DebugToken>) -> Option<Statement> {
         self.input = input;
 
         let mut program: Vec<Box<Statement>> = Vec::new();
-        while self.current() != lexer::Token::EOF {
+        while !self.at_end() && self.current() != lexer::Token::EOF {
             program.push(Box::new(self.declaration()));
         }
 
-        Statement::Program(program)
+        Some(Statement::Program(program))
     }
 
     fn expression(&mut self) -> Expression {
         self.assignment()
     }
 
+    // TODO: literally does not work
+    // lhs should be an expression, not just an identifier. dont start by scanning for a assignment
+    // operator
     fn assignment(&mut self) -> Expression {
         let operator = match self.peek() {
             lexer::Token::Equal => Some(Operator::Equal),
@@ -853,7 +932,9 @@ impl Parser {
 
                     while self.current() != lexer::Token::RCurly {
                         if !comma {
-                            panic!("expected comma seperating member values in struct constructor");
+                            self.error(
+                                "expected comma seperating member values in struct constructor",
+                            );
                         }
 
                         let member_identifier = self.primary();
@@ -863,6 +944,7 @@ impl Parser {
                         );
 
                         self.expect(lexer::Token::Colon, "expected colon in struct constructor");
+
                         let val = Box::new(self.expression());
 
                         comma = false;
@@ -919,14 +1001,16 @@ impl Parser {
                             continue;
                         }
 
+                        // hey this shouldnt be a self.expect()
+                        // dont make that mistake again pretty please
                         if self.current() != lexer::Token::RParen {
-                            panic!("expected comma seperating arguments or closing parenthesis.");
+                            self.error("expected ',' or ')'");
                         }
-
                         break;
                     }
 
-                    self.advance(); // consume RParen
+                    // consume RParen
+                    self.advance();
                     Expression::FunctionCall {
                         identifier: Box::new(expr),
                         args,
@@ -970,8 +1054,8 @@ impl Parser {
                 return expr;
             }
             _ => {
-                println!("found: {:?}", token);
-                panic!("expected expression.");
+                self.error("expected expression.");
+                return Expression::Null;
             }
         }
     }
