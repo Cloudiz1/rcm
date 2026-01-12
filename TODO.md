@@ -16,8 +16,11 @@ Expressions:
 - primary (done)
 
 ### Declarations:
+- global variables... (should be trivial) (done)
 - types (mostly done)
-	- array types are strange atm
+	- array types are strange atm (fixed!)
+	- a function pointer type!
+		- *fn({type}) type
 	- unless i want to support structs being declared at the bottom being able to be used anywhere
 	- would require another pass but should work out well if i decide to add a preprocessor too
 - variable declaration (done)
@@ -29,11 +32,14 @@ Expressions:
 
 ### Statements:
 - if statements (done)
-- while statements (done)
-- for statements 
+- while loops (done)
+- for loops 
 - blocks (done)
 - expression statement (done)
 
-all of error handling
+### Error handling
+- panic mode (done)
+- i think there may be some strange edge case with self.unwrap_identifier(), but i think i want to test that later
+
 environments
 deciding on a for loop syntax might also be good!

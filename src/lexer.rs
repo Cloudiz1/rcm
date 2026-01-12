@@ -458,6 +458,8 @@ pub fn print_tokens(tokens: Vec<DebugToken>) {
     println!("");
 }
 
+// TODO: i can 100% reuse these tests if i just write a helper that ignores the line numbers for me
+
 // #[cfg(test)]
 // mod tests {
 //     use super::*;

@@ -30,7 +30,7 @@ whileStmt = "while" expr block;
 // forStmt = "for" "(" varDeclaration ";" expr ";" expr ")" block;
 block = "{" {stmt} "}"
 
-assignment = identifier ("=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "^=" | "|=" | "<<=" | ">>=") expr;
+assignment = postfix ("=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "^=" | "|=" | "<<=" | ">>=") expr;
 expr = logicalOR;
 logicalOR = logicalAND {'||' logicalAND};
 logicalAND = comparison {'&&' comparison};

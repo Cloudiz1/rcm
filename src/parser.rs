@@ -28,22 +28,19 @@ pub enum Operator {
     LessThanEqual,
     GreaterThanEqual,
 
-    ArrayAccess,
     Reference,
     Dereference,
     Dot,
-
-    Assignment,
-
-    Unimplemented,
 }
 
 #[derive(Debug, Clone)]
 pub enum Type {
     Pointer(Box<Type>),
-    Array { t: Box<Type>, size: Box<Expression> },
-    Struct(String),
-    Enum(String),
+    Array {
+        t: Box<Type>,
+        size: Option<Box<Expression>>,
+    },
+    Typedef(String),
     I8,
     U8,
     I16,
@@ -87,7 +84,7 @@ pub enum Expression {
         rhs: Box<Expression>,
     },
     Assignment {
-        identifier: String,
+        identifier: Box<Expression>,
         value: Box<Expression>,
     },
     FunctionCall {
@@ -95,8 +92,11 @@ pub enum Expression {
         args: Vec<Box<Expression>>,
     },
     ArrayAccess {
-        identifier: Box<Expression>, // TODO: support foo[0][0]
+        identifier: Box<Expression>,
         index: Box<Expression>,
+    },
+    ArrayConstructor {
+        values: Vec<Box<Expression>>,
     },
     StructMember {
         identifier: String,
@@ -108,7 +108,7 @@ pub enum Expression {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Statement {
     ParseError, // uesd for panic mode
     Program(Vec<Box<Statement>>),
@@ -161,11 +161,24 @@ pub enum Statement {
     },
 }
 
+enum GlobalSymbol {
+    Function {
+        args: Vec<Box<Type>>,
+        ret: Box<Type>,
+    },
+    Variable {
+        t: Box<Type>,
+    },
+    Enum,
+    Struct,
+}
+
 pub struct Parser {
+    global_symbols: HashMap<String, GlobalSymbol>,
     input: Vec<lexer::DebugToken>,
     i: usize,
     types: HashMap<String, Type>,
-    // panic: bool,
+    panic: bool,
 }
 
 // helpers
@@ -194,6 +207,8 @@ impl Parser {
             input: Vec::new(),
             i: 0,
             types,
+            panic: false,
+            global_symbols: HashMap::new(),
         }
     }
 
@@ -221,13 +236,13 @@ impl Parser {
         self.input[self.i].token_type.clone()
     }
 
-    fn peek(&self) -> lexer::Token {
-        if self.i >= self.input.len() - 1 {
-            panic!("Parser.peek() tried to access out of bounds index.");
-        }
-
-        self.input[self.i + 1].token_type.clone()
-    }
+    // fn peek(&self) -> lexer::Token {
+    //     if self.i >= self.input.len() - 1 {
+    //         panic!("Parser.peek() tried to access out of bounds index.");
+    //     }
+    //
+    //     self.input[self.i + 1].token_type.clone()
+    // }
 
     fn consume(&mut self) -> lexer::Token {
         self.i += 1;
@@ -271,14 +286,6 @@ impl Parser {
         }
     }
 
-    fn handle_error(&self, error: bool, expected_statement: Statement) -> Statement {
-        if error {
-            return Statement::ParseError;
-        }
-
-        return expected_statement;
-    }
-
     /*
      * consumes token
      */
@@ -312,21 +319,22 @@ impl Parser {
 
     fn parse_type(&mut self) -> Type {
         match self.current() {
-            // TODO: this quick implementation has a lot left to be desired
-            // id like to have an implicit size, let foo: [_]u8 = {'a', 'b', 'c'}, for example
-            // id like to have a slice type as well, fn foo(input: []u8) should be valid
-            // its probably worth it to have strings as just char * and chars as u8s
-            // but in the same vein a non null terminated string seems nice
             lexer::Token::LBrace => {
                 self.advance(); // consume LBrace
-                let size = self.term();
-                if !self.expect(lexer::Token::RBrace, "expected closing brace.") {
-                    return Type::Void;
+
+                let mut size = None;
+                if self.current() != lexer::Token::RBrace {
+                    size = Some(Box::new(self.term()));
+                    if !self.expect(lexer::Token::RBrace, "expected closing brace.") {
+                        return Type::Void;
+                    }
+                } else {
+                    self.advance();
                 }
 
                 Type::Array {
                     t: Box::new(self.parse_type()),
-                    size: Box::new(size),
+                    size,
                 }
             }
             lexer::Token::Star => {
@@ -337,10 +345,9 @@ impl Parser {
                 self.advance();
                 if let Some(t) = self.types.get(&identifier) {
                     return t.clone();
+                } else {
+                    return Type::Typedef(identifier);
                 }
-
-                self.error("unrecognized type.");
-                return Type::Void;
             }
             _ => {
                 self.error("expected type.");
@@ -349,24 +356,25 @@ impl Parser {
         }
     }
 
-    fn print(&self, msg: &str) {
-        println!("{}: {:?}", msg, self.current());
+    fn print(&self) {
+        println!("{:?}", self.current());
     }
 }
 
 // panic mode
 impl Parser {
-    // TODO: you shouldnt actually report errors in panic mode after the initial one
-    // you should only sync after the declaration is done
-    fn error(&mut self, msg: &str) -> Statement {
+    fn error(&mut self, msg: &str) {
+        if self.panic {
+            return;
+        }
+
         let token = self.get_debug_token();
         println!(
             "{} | at token \"{:?}\": {} ",
             token.line, token.token_type, msg
         );
 
-        self.synchronize();
-        return Statement::ParseError;
+        self.panic = true;
     }
 
     fn synchronize(&mut self) {
@@ -403,12 +411,23 @@ impl Parser {
             self.advance();
         }
 
-        match self.current() {
+        let out = match self.current() {
             lexer::Token::Fn => self.function_declaration(),
             lexer::Token::Struct => self.struct_declaration(),
             lexer::Token::Enum => self.enum_declaration(),
-            _ => self.statement(),
+            lexer::Token::Let | lexer::Token::Const => self.variable_declaration(),
+            _ => {
+                self.error("unrecognized top level expression");
+                Statement::ParseError
+            }
+        };
+
+        if self.panic {
+            self.synchronize();
+            self.panic = false;
         }
+
+        return out;
     }
 
     fn function_declaration(&mut self) -> Statement {
@@ -464,7 +483,7 @@ impl Parser {
         }
     }
 
-    // TODO: Currently allows zero-sized structs, not sure if i want this or not
+    // Currently allows zero-sized structs, not sure if i want this or not
     fn struct_declaration(&mut self) -> Statement {
         let struct_public = self.is_public();
         self.advance(); // consume struct token
@@ -477,8 +496,8 @@ impl Parser {
             return Statement::ParseError;
         }
 
-        self.types
-            .insert(struct_name.clone(), Type::Struct(struct_name.clone()));
+        self.global_symbols
+            .insert(struct_name.clone(), GlobalSymbol::Struct);
 
         let mut members: Vec<Box<Statement>> = Vec::new();
         let mut comma: bool = true;
@@ -558,7 +577,7 @@ impl Parser {
         self.advance(); // consume enum token
         let mut identifier = self.primary();
         let name = self.unwrap_identifier(identifier, "expected identifier in enum declaration.");
-        self.types.insert(name.clone(), Type::Enum(name.clone()));
+        self.global_symbols.insert(name.clone(), GlobalSymbol::Enum);
 
         let mut varients: Vec<String> = Vec::new();
 
@@ -720,52 +739,54 @@ impl Parser {
         self.assignment()
     }
 
-    // TODO: literally does not work
-    // lhs should be an expression, not just an identifier. dont start by scanning for a assignment
-    // operator
     fn assignment(&mut self) -> Expression {
-        let operator = match self.peek() {
-            lexer::Token::Equal => Some(Operator::Equal),
-            lexer::Token::PlusEqual => Some(Operator::Add),
-            lexer::Token::MinusEqual => Some(Operator::Subtract),
-            lexer::Token::StarEqual => Some(Operator::Multiply),
-            lexer::Token::SlashEqual => Some(Operator::Divide),
-            lexer::Token::PercentEqual => Some(Operator::Modulus),
-            lexer::Token::PipeEqual => Some(Operator::BitwiseOr),
-            lexer::Token::AmpersandEqual => Some(Operator::BitwiseAnd),
-            lexer::Token::CaretEqual => Some(Operator::BitwiseXOr),
-            lexer::Token::DoubleLeftCaret => Some(Operator::BitwiseLeftShift),
-            lexer::Token::DoubleRightCaret => Some(Operator::BitwiseRightShift),
-            _ => None,
-        };
+        let mut expr = self.logical_or();
 
-        if let Some(unwrapped_operator) = operator {
-            let expected_identifier = self.primary();
-            let identifier =
-                self.unwrap_identifier(expected_identifier, "lhs is not an identifier");
+        if self.match_advance(&[
+            lexer::Token::Equal,
+            lexer::Token::PlusEqual,
+            lexer::Token::MinusEqual,
+            lexer::Token::StarEqual,
+            lexer::Token::SlashEqual,
+            lexer::Token::PercentEqual,
+            lexer::Token::PipeEqual,
+            lexer::Token::AmpersandEqual,
+            lexer::Token::CaretEqual,
+            lexer::Token::DoubleLeftCaret,
+            lexer::Token::DoubleRightCaret,
+        ]) {
+            let operator = match self.previous() {
+                lexer::Token::Equal => Operator::Equal,
+                lexer::Token::PlusEqual => Operator::Add,
+                lexer::Token::MinusEqual => Operator::Subtract,
+                lexer::Token::StarEqual => Operator::Multiply,
+                lexer::Token::SlashEqual => Operator::Divide,
+                lexer::Token::PercentEqual => Operator::Modulus,
+                lexer::Token::PipeEqual => Operator::BitwiseOr,
+                lexer::Token::AmpersandEqual => Operator::BitwiseAnd,
+                lexer::Token::CaretEqual => Operator::BitwiseXOr,
+                lexer::Token::DoubleLeftCaret => Operator::BitwiseLeftShift,
+                lexer::Token::DoubleRightCaret => Operator::BitwiseRightShift,
+                _ => unreachable!(),
+            };
 
-            self.advance(); // skip the operator
             let rhs = self.expression();
 
-            if unwrapped_operator == Operator::Equal {
-                return Expression::Assignment {
-                    identifier,
+            if operator == Operator::Equal {
+                expr = Expression::Assignment {
+                    identifier: Box::new(expr),
                     value: Box::new(rhs),
                 };
             } else {
-                let value = self.create_binary(
-                    Expression::Identifier(identifier.clone()),
-                    unwrapped_operator,
-                    rhs,
-                );
-                return Expression::Assignment {
-                    identifier,
+                let value = self.create_binary(expr.clone(), operator, rhs);
+                expr = Expression::Assignment {
+                    identifier: Box::new(expr),
                     value: Box::new(value),
                 };
             }
         }
 
-        self.logical_or()
+        return expr;
     }
 
     fn logical_or(&mut self) -> Expression {
@@ -1003,6 +1024,7 @@ impl Parser {
 
                         // hey this shouldnt be a self.expect()
                         // dont make that mistake again pretty please
+                        // (cost me half an hour of debugging btw!)
                         if self.current() != lexer::Token::RParen {
                             self.error("expected ',' or ')'");
                         }
@@ -1019,6 +1041,7 @@ impl Parser {
                 lexer::Token::LBrace => {
                     self.advance(); // consume LBrace
                     let index = Box::new(self.expression());
+
                     self.expect(
                         lexer::Token::RBrace,
                         "expected closing bracket for array access.",
@@ -1052,6 +1075,27 @@ impl Parser {
                 );
 
                 return expr;
+            }
+            lexer::Token::LBrace => {
+                let mut values: Vec<Box<Expression>> = Vec::new();
+                let mut comma = true;
+                while self.current() != lexer::Token::RBrace {
+                    if !comma {
+                        self.error("expected comma");
+                    }
+
+                    let val = self.expression();
+                    comma = false;
+                    if self.current() == lexer::Token::Comma {
+                        self.advance();
+                        comma = true;
+                    }
+
+                    values.push(Box::new(val));
+                }
+
+                self.advance(); // consumes RBrace
+                Expression::ArrayConstructor { values }
             }
             _ => {
                 self.error("expected expression.");

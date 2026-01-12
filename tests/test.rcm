@@ -10,7 +10,6 @@ struct Car {
 }
 
 pub fn main() void {
-	// let car = Car.new();
-	Car.new();
+	let car = Car.new();
 	car.drive();
 }
