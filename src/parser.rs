@@ -161,20 +161,26 @@ pub enum Statement {
     },
 }
 
-enum GlobalSymbol {
+#[derive(Debug)]
+enum Symbol {
     Function {
-        args: Vec<Box<Type>>,
-        ret: Box<Type>,
+        params: Vec<Type>,
+        ret: Type,
     },
     Variable {
-        t: Box<Type>,
+        variable_type: Option<Type>,
     },
-    Enum,
-    Struct,
+    Enum {
+        varients: Vec<String>,
+    },
+    Struct {
+        members: HashMap<String, Symbol>, // Symbol::Variable
+        methods: HashMap<String, Symbol>, // Symbol::Function
+    },
 }
 
 pub struct Parser {
-    global_symbols: HashMap<String, GlobalSymbol>,
+    global_symbols: HashMap<String, Symbol>,
     input: Vec<lexer::DebugToken>,
     i: usize,
     types: HashMap<String, Type>,
@@ -193,11 +199,11 @@ impl Parser {
         types.insert("u32".to_owned(), Type::U32);
         types.insert("i64".to_owned(), Type::I64);
         types.insert("u64".to_owned(), Type::U64);
-        types.insert("isize".to_owned(), Type::Isize);
-        types.insert("usize".to_owned(), Type::Usize);
         types.insert("f16".to_owned(), Type::F16);
         types.insert("f32".to_owned(), Type::F32);
         types.insert("f64".to_owned(), Type::F64);
+        types.insert("isize".to_owned(), Type::Isize);
+        types.insert("usize".to_owned(), Type::Usize);
         types.insert("bool".to_owned(), Type::Bool);
         types.insert("void".to_owned(), Type::Void);
         types.insert("string".to_owned(), Type::Str);
@@ -359,6 +365,10 @@ impl Parser {
     fn print(&self) {
         println!("{:?}", self.current());
     }
+
+    pub fn print_global_table(&self) {
+        println!("{:#?}", self.global_symbols);
+    }
 }
 
 // panic mode
@@ -415,7 +425,7 @@ impl Parser {
             lexer::Token::Fn => self.function_declaration(),
             lexer::Token::Struct => self.struct_declaration(),
             lexer::Token::Enum => self.enum_declaration(),
-            lexer::Token::Let | lexer::Token::Const => self.variable_declaration(),
+            lexer::Token::Let | lexer::Token::Const => self.variable_declaration(true),
             _ => {
                 self.error("unrecognized top level expression");
                 Statement::ParseError
@@ -441,6 +451,8 @@ impl Parser {
         self.expect(lexer::Token::LParen, "expected '(' after function name.");
 
         let mut parameters: Vec<Box<Statement>> = Vec::new();
+        let mut types: Vec<Type> = Vec::new();
+        let mut param_types: Vec<Box<Type>> = Vec::new();
         while self.current() != lexer::Token::RParen {
             identifier = self.primary();
             let param_name = self.unwrap_identifier(
@@ -451,6 +463,8 @@ impl Parser {
             self.expect(lexer::Token::Colon, "expected colon after parameter name.");
 
             let param_type = self.parse_type();
+            types.push(param_type.clone());
+            param_types.push(Box::new(param_type.clone()));
             parameters.push(Box::new(Statement::Parameter {
                 name: param_name,
                 t: param_type,
@@ -472,6 +486,14 @@ impl Parser {
         self.expect(lexer::Token::RParen, "expected ')'");
 
         let return_type = self.parse_type();
+
+        self.global_symbols.insert(
+            name.clone(),
+            Symbol::Function {
+                params: types,
+                ret: return_type.clone(),
+            },
+        );
 
         let body = Box::new(self.block());
         Statement::FunctionDeclaration {
@@ -496,8 +518,8 @@ impl Parser {
             return Statement::ParseError;
         }
 
-        self.global_symbols
-            .insert(struct_name.clone(), GlobalSymbol::Struct);
+        let mut members_table: HashMap<String, Symbol> = HashMap::new();
+        let mut methods_table: HashMap<String, Symbol> = HashMap::new();
 
         let mut members: Vec<Box<Statement>> = Vec::new();
         let mut comma: bool = true;
@@ -528,6 +550,13 @@ impl Parser {
                         self.advance();
                     }
 
+                    members_table.insert(
+                        identifier.clone(),
+                        Symbol::Variable {
+                            variable_type: Some(t.clone()),
+                        },
+                    );
+
                     members.push(Box::new(Statement::Member {
                         name: identifier,
                         t,
@@ -546,7 +575,38 @@ impl Parser {
             }
 
             if self.current() == lexer::Token::Fn {
-                methods.push(Box::new(self.function_declaration()));
+                let method = self.function_declaration();
+
+                match method.clone() {
+                    Statement::FunctionDeclaration {
+                        name,
+                        return_type,
+                        parameters,
+                        body: _,
+                        public: _,
+                    } => {
+                        let mut types: Vec<Type> = Vec::new();
+                        for param in parameters {
+                            match *param {
+                                Statement::Parameter { name: _, t } => {
+                                    types.push(t);
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+
+                        methods_table.insert(
+                            name,
+                            Symbol::Function {
+                                params: types,
+                                ret: return_type,
+                            },
+                        );
+                    }
+                    _ => unreachable!(),
+                }
+
+                methods.push(Box::new(method));
             } else {
                 break;
             }
@@ -564,6 +624,14 @@ impl Parser {
             "expected closing curly on struct declaration.",
         );
 
+        self.global_symbols.insert(
+            struct_name.clone(),
+            Symbol::Struct {
+                members: members_table,
+                methods: methods_table,
+            },
+        );
+
         Statement::StructDeclaration {
             name: struct_name,
             members,
@@ -577,7 +645,6 @@ impl Parser {
         self.advance(); // consume enum token
         let mut identifier = self.primary();
         let name = self.unwrap_identifier(identifier, "expected identifier in enum declaration.");
-        self.global_symbols.insert(name.clone(), GlobalSymbol::Enum);
 
         let mut varients: Vec<String> = Vec::new();
 
@@ -604,6 +671,13 @@ impl Parser {
             "expected closing right curly after enum declaration.",
         );
 
+        self.global_symbols.insert(
+            name.clone(),
+            Symbol::Enum {
+                varients: varients.clone(),
+            },
+        );
+
         Statement::EnumDeclaration {
             name,
             varients,
@@ -611,7 +685,7 @@ impl Parser {
         }
     }
 
-    fn variable_declaration(&mut self) -> Statement {
+    fn variable_declaration(&mut self, global_variable: bool) -> Statement {
         let mut is_constant = false;
         let mut variable_type: Option<Type> = None;
         let mut initial_value: Option<Box<Expression>> = None;
@@ -636,6 +710,15 @@ impl Parser {
             "expected semicolon after variable declaration.",
         );
 
+        if global_variable {
+            self.global_symbols.insert(
+                identifier.clone(),
+                Symbol::Variable {
+                    variable_type: variable_type.clone(),
+                },
+            );
+        }
+
         return Statement::VariableDeclaration {
             identifier,
             variable_type,
@@ -647,7 +730,7 @@ impl Parser {
     fn statement(&mut self) -> Statement {
         match self.current() {
             lexer::Token::LCurly => self.block(),
-            lexer::Token::Let | lexer::Token::Const => self.variable_declaration(),
+            lexer::Token::Let | lexer::Token::Const => self.variable_declaration(false),
             lexer::Token::While => self.while_statement(),
             lexer::Token::If => self.if_statement(),
             lexer::Token::Return => self.return_statement(),

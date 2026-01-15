@@ -20,5 +20,6 @@ fn main() {
     let mut parser = parser::Parser::new();
     if let Some(ast) = parser.parse(tokens) {
         println!("{:#?}", ast);
+        parser.print_global_table();
     }
 }
