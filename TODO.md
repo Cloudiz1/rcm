@@ -41,5 +41,8 @@ Expressions:
 - panic mode (done)
 - i think there may be some strange edge case with self.unwrap_identifier(), but i think i want to test that later
 
+### Semantic analysis
+- may want to decouple the function / methods and members / variables in my enum
+
 environments
 deciding on a for loop syntax might also be good!

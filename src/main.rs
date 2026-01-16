@@ -3,6 +3,7 @@ use std::fs;
 
 pub mod lexer;
 pub mod parser;
+pub mod tac;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -18,8 +19,10 @@ fn main() {
     // lexer::print_tokens(tokens.clone());
 
     let mut parser = parser::Parser::new();
-    if let Some(ast) = parser.parse(tokens) {
-        println!("{:#?}", ast);
-        parser.print_global_table();
-    }
+    let Some(ast) = parser.parse(tokens) else {
+        return;
+    };
+
+    let mut tac = tac::TAC::new();
+    tac.generate(ast);
 }

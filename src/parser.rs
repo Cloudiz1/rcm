@@ -109,8 +109,32 @@ pub enum Expression {
 }
 
 #[derive(Debug, Clone)]
+pub struct Parameter {
+    pub name: String,
+    pub t: Type,
+}
+
+#[derive(Debug, Clone)]
+pub struct Member {
+    pub name: String,
+    pub t: Type,
+    pub public: bool,
+}
+
+// its repetitive to have the same struct for methods and functions but it makes my enum more
+// orgainzed and codegen have less code, so i think its worth it
+#[derive(Debug, Clone)]
+pub struct Method {
+    name: String,
+    return_type: Type,
+    parameters: Vec<Parameter>,
+    body: Box<Statement>,
+    public: bool,
+}
+
+#[derive(Debug, Clone)]
 pub enum Statement {
-    ParseError, // uesd for panic mode
+    ParseError, // used for panic mode
     Program(Vec<Box<Statement>>),
     ExpressionStatement(Box<Expression>),
     Block(Vec<Box<Statement>>),
@@ -118,7 +142,8 @@ pub enum Statement {
         identifier: String,
         variable_type: Option<Type>,
         initial_value: Option<Box<Expression>>,
-        is_constant: bool,
+        constant: bool,
+        public: bool,
     },
     EnumDeclaration {
         name: String,
@@ -135,7 +160,7 @@ pub enum Statement {
     FunctionDeclaration {
         name: String,
         return_type: Type,
-        parameters: Vec<Box<Statement>>, // vec of params
+        parameters: Vec<Parameter>,
         body: Box<Statement>,
         public: bool,
     },
@@ -161,26 +186,7 @@ pub enum Statement {
     },
 }
 
-#[derive(Debug)]
-enum Symbol {
-    Function {
-        params: Vec<Type>,
-        ret: Type,
-    },
-    Variable {
-        variable_type: Option<Type>,
-    },
-    Enum {
-        varients: Vec<String>,
-    },
-    Struct {
-        members: HashMap<String, Symbol>, // Symbol::Variable
-        methods: HashMap<String, Symbol>, // Symbol::Function
-    },
-}
-
 pub struct Parser {
-    global_symbols: HashMap<String, Symbol>,
     input: Vec<lexer::DebugToken>,
     i: usize,
     types: HashMap<String, Type>,
@@ -214,7 +220,6 @@ impl Parser {
             i: 0,
             types,
             panic: false,
-            global_symbols: HashMap::new(),
         }
     }
 
@@ -365,10 +370,6 @@ impl Parser {
     fn print(&self) {
         println!("{:?}", self.current());
     }
-
-    pub fn print_global_table(&self) {
-        println!("{:#?}", self.global_symbols);
-    }
 }
 
 // panic mode
@@ -450,9 +451,7 @@ impl Parser {
 
         self.expect(lexer::Token::LParen, "expected '(' after function name.");
 
-        let mut parameters: Vec<Box<Statement>> = Vec::new();
-        let mut types: Vec<Type> = Vec::new();
-        let mut param_types: Vec<Box<Type>> = Vec::new();
+        let mut parameters: Vec<Parameter> = Vec::new();
         while self.current() != lexer::Token::RParen {
             identifier = self.primary();
             let param_name = self.unwrap_identifier(
@@ -463,12 +462,10 @@ impl Parser {
             self.expect(lexer::Token::Colon, "expected colon after parameter name.");
 
             let param_type = self.parse_type();
-            types.push(param_type.clone());
-            param_types.push(Box::new(param_type.clone()));
-            parameters.push(Box::new(Statement::Parameter {
+            parameters.push(Parameter {
                 name: param_name,
                 t: param_type,
-            }));
+            });
 
             if self.current() == lexer::Token::Comma {
                 self.advance();
@@ -487,14 +484,6 @@ impl Parser {
 
         let return_type = self.parse_type();
 
-        self.global_symbols.insert(
-            name.clone(),
-            Symbol::Function {
-                params: types,
-                ret: return_type.clone(),
-            },
-        );
-
         let body = Box::new(self.block());
         Statement::FunctionDeclaration {
             name,
@@ -504,6 +493,70 @@ impl Parser {
             public,
         }
     }
+
+    // fn function_declaration_struct(&mut self) -> Method {
+    //     let public = self.is_public();
+    //
+    //     self.advance(); // consume fn token
+    //     let mut identifier = self.primary();
+    //     let name =
+    //         self.unwrap_identifier(identifier, "expected function name in after keyword 'fn'");
+    //
+    //     self.expect(lexer::Token::LParen, "expected '(' after function name.");
+    //
+    //     let mut parameters: Vec<Parameter> = Vec::new();
+    //     while self.current() != lexer::Token::RParen {
+    //         identifier = self.primary();
+    //         let param_name = self.unwrap_identifier(
+    //             identifier,
+    //             "expected parameter name in function declaration.",
+    //         );
+    //
+    //         self.expect(lexer::Token::Colon, "expected colon after parameter name.");
+    //
+    //         let param_type = self.parse_type();
+    //         parameters.push(Parameter {
+    //             name: param_name,
+    //             t: param_type,
+    //         });
+    //
+    //         if self.current() == lexer::Token::Comma {
+    //             self.advance();
+    //             continue;
+    //         }
+    //
+    //         match self.current() {
+    //             lexer::Token::Identifier(_) => {
+    //                 self.error("missing comma between function parameters.");
+    //             }
+    //             _ => {}
+    //         }
+    //     }
+    //
+    //     self.expect(lexer::Token::RParen, "expected ')'");
+    //
+    //     let return_type = self.parse_type();
+    //
+    //     let body = Box::new(self.block());
+    //     Method {
+    //         name,
+    //         return_type,
+    //         parameters,
+    //         body,
+    //         public,
+    //     }
+    // }
+
+    // fn function_declaration(&mut self) -> Statement {
+    //     let s = self.function_declaration_struct();
+    //     Statement::FunctionDeclaration {
+    //         name: s.name,
+    //         return_type: s.return_type,
+    //         parameters: s.parameters,
+    //         body: s.body,
+    //         public: s.public,
+    //     }
+    // }
 
     // Currently allows zero-sized structs, not sure if i want this or not
     fn struct_declaration(&mut self) -> Statement {
@@ -517,9 +570,6 @@ impl Parser {
         if !self.expect(lexer::Token::LCurly, "expected body of struct.") {
             return Statement::ParseError;
         }
-
-        let mut members_table: HashMap<String, Symbol> = HashMap::new();
-        let mut methods_table: HashMap<String, Symbol> = HashMap::new();
 
         let mut members: Vec<Box<Statement>> = Vec::new();
         let mut comma: bool = true;
@@ -550,13 +600,6 @@ impl Parser {
                         self.advance();
                     }
 
-                    members_table.insert(
-                        identifier.clone(),
-                        Symbol::Variable {
-                            variable_type: Some(t.clone()),
-                        },
-                    );
-
                     members.push(Box::new(Statement::Member {
                         name: identifier,
                         t,
@@ -575,38 +618,7 @@ impl Parser {
             }
 
             if self.current() == lexer::Token::Fn {
-                let method = self.function_declaration();
-
-                match method.clone() {
-                    Statement::FunctionDeclaration {
-                        name,
-                        return_type,
-                        parameters,
-                        body: _,
-                        public: _,
-                    } => {
-                        let mut types: Vec<Type> = Vec::new();
-                        for param in parameters {
-                            match *param {
-                                Statement::Parameter { name: _, t } => {
-                                    types.push(t);
-                                }
-                                _ => unreachable!(),
-                            }
-                        }
-
-                        methods_table.insert(
-                            name,
-                            Symbol::Function {
-                                params: types,
-                                ret: return_type,
-                            },
-                        );
-                    }
-                    _ => unreachable!(),
-                }
-
-                methods.push(Box::new(method));
+                methods.push(Box::new(self.function_declaration()));
             } else {
                 break;
             }
@@ -622,14 +634,6 @@ impl Parser {
         self.expect(
             lexer::Token::RCurly,
             "expected closing curly on struct declaration.",
-        );
-
-        self.global_symbols.insert(
-            struct_name.clone(),
-            Symbol::Struct {
-                members: members_table,
-                methods: methods_table,
-            },
         );
 
         Statement::StructDeclaration {
@@ -671,13 +675,6 @@ impl Parser {
             "expected closing right curly after enum declaration.",
         );
 
-        self.global_symbols.insert(
-            name.clone(),
-            Symbol::Enum {
-                varients: varients.clone(),
-            },
-        );
-
         Statement::EnumDeclaration {
             name,
             varients,
@@ -685,12 +682,22 @@ impl Parser {
         }
     }
 
-    fn variable_declaration(&mut self, global_variable: bool) -> Statement {
-        let mut is_constant = false;
+    fn variable_declaration(&mut self, global: bool) -> Statement {
+        let mut public = false;
+
+        if global {
+            if self.current() == lexer::Token::Pub {
+                public = true;
+            } else {
+                self.error("Only top level variable declarations can be public.");
+            }
+        }
+
+        let mut constant = false;
         let mut variable_type: Option<Type> = None;
         let mut initial_value: Option<Box<Expression>> = None;
         if self.consume() == lexer::Token::Const {
-            is_constant = true;
+            constant = true;
         }
 
         let expr = self.primary();
@@ -710,20 +717,12 @@ impl Parser {
             "expected semicolon after variable declaration.",
         );
 
-        if global_variable {
-            self.global_symbols.insert(
-                identifier.clone(),
-                Symbol::Variable {
-                    variable_type: variable_type.clone(),
-                },
-            );
-        }
-
         return Statement::VariableDeclaration {
             identifier,
             variable_type,
             initial_value,
-            is_constant,
+            constant,
+            public,
         };
     }
 
@@ -807,7 +806,7 @@ impl Parser {
 
 // expressions
 impl Parser {
-    pub fn parse(&mut self, input: Vec<lexer::DebugToken>) -> Option<Statement> {
+    pub fn parse(&mut self, input: Vec<lexer::DebugToken>) -> Option<Vec<Box<Statement>>> {
         self.input = input;
 
         let mut program: Vec<Box<Statement>> = Vec::new();
@@ -815,7 +814,8 @@ impl Parser {
             program.push(Box::new(self.declaration()));
         }
 
-        Some(Statement::Program(program))
+        // Some(Statement::Program(program))
+        Some(program)
     }
 
     fn expression(&mut self) -> Expression {
