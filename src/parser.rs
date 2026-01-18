@@ -144,6 +144,7 @@ pub enum Statement {
         initial_value: Option<Box<Expression>>,
         constant: bool,
         public: bool,
+        global: bool,
     },
     EnumDeclaration {
         name: String,
@@ -723,6 +724,7 @@ impl Parser {
             initial_value,
             constant,
             public,
+            global,
         };
     }
 
@@ -806,7 +808,7 @@ impl Parser {
 
 // expressions
 impl Parser {
-    pub fn parse(&mut self, input: Vec<lexer::DebugToken>) -> Option<Vec<Box<Statement>>> {
+    pub fn parse(&mut self, input: Vec<lexer::DebugToken>) -> Option<Statement> {
         self.input = input;
 
         let mut program: Vec<Box<Statement>> = Vec::new();
@@ -814,8 +816,8 @@ impl Parser {
             program.push(Box::new(self.declaration()));
         }
 
-        // Some(Statement::Program(program))
-        Some(program)
+        Some(Statement::Program(program))
+        // Some(program)
     }
 
     fn expression(&mut self) -> Expression {

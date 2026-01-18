@@ -46,3 +46,7 @@ Expressions:
 
 environments
 deciding on a for loop syntax might also be good!
+
+i think it would be worth it to have a bunch of compiler expansions inbetween the lexer and the parser to make my data types simpler
+<!-- - struct methods: `pub fn foo(self: *Struct) void` should become `pub fn Struct@foo(self: *Struct)`, which should cause no major issues as the `@` symbol is not a valid token in rcm  -->
+<!-- - struct variables: similar idea, `pub foo` -->
