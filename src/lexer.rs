@@ -44,7 +44,7 @@ pub enum Token {
     Percent,
 
     // Bitwise
-    Bang,             // !
+    Tilde,            // ~
     Ampersand,        // &
     Pipe,             // |
     Caret,            // ^
@@ -65,7 +65,8 @@ pub enum Token {
     DoubleLeftCaretEqual,  // <<=
     DoubleRightCaretEqual, // >>=
 
-    // Conditional
+    // logical
+    Bang,            // !
     EqualEqual,      // ==
     DoubleAmpersand, // &&
     DoublePipe,      // ||
@@ -360,6 +361,7 @@ impl Tokenizer {
             }
             '%' => self.is_next_equal(Token::Percent, Token::PercentEqual),
             '!' => self.is_next_equal(Token::Bang, Token::BangEqual),
+            '~' => Token::Tilde,
             '^' => self.is_next_equal(Token::Caret, Token::CaretEqual),
             '|' => {
                 if self.is_double(c) {

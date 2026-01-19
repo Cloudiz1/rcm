@@ -10,17 +10,18 @@ pub enum Operator {
     Divide,
     Modulus,
 
+    BitwiseNot,
     BitwiseOr,
     BitwiseAnd,
     BitwiseXOr,
     BitwiseLeftShift,
     BitwiseRightShift,
 
-    Not,
     Negate,
 
-    Or,
-    And,
+    LogicalNot,
+    LogicalOr,
+    LogicalAnd,
     Equal,
     NotEqual,
     LessThan,
@@ -73,10 +74,6 @@ pub enum Expression {
     Unary {
         operator: Operator,
         member: Box<Expression>,
-    },
-    Postfix {
-        lhs: Box<Expression>,
-        operator: Operator,
     },
     Binary {
         lhs: Box<Expression>,
@@ -879,7 +876,7 @@ impl Parser {
 
         while self.match_advance(&[lexer::Token::DoublePipe]) {
             let rhs = self.logical_and();
-            expr = self.create_binary(expr, Operator::Or, rhs);
+            expr = self.create_binary(expr, Operator::LogicalOr, rhs);
         }
 
         return expr;
@@ -890,7 +887,7 @@ impl Parser {
 
         while self.match_advance(&[lexer::Token::DoubleAmpersand]) {
             let rhs = self.comparison();
-            expr = self.create_binary(expr, Operator::And, rhs);
+            expr = self.create_binary(expr, Operator::LogicalAnd, rhs);
         }
 
         return expr;
@@ -1008,11 +1005,13 @@ impl Parser {
     fn unary(&mut self) -> Expression {
         if self.match_advance(&[
             lexer::Token::Bang,
+            lexer::Token::Tilde,
             lexer::Token::Minus,
             lexer::Token::Ampersand,
         ]) {
             let operator = match self.previous() {
-                lexer::Token::Bang => Operator::Not,
+                lexer::Token::Bang => Operator::LogicalNot,
+                lexer::Token::Tilde => Operator::BitwiseNot,
                 lexer::Token::Minus => Operator::Negate,
                 lexer::Token::Ampersand => Operator::Reference,
                 _ => unreachable!(),

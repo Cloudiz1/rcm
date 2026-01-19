@@ -39,7 +39,7 @@ bitwise = bitshift { ('&' | '|' | '^') bitshift };
 bitshift = term { ( '<<' | '>>' ) term };
 term = factor { ( '+' | '-' ) factor };
 factor = unary { ( '*' | '/' | '%' ) unary };
-unary = ('!' | '-' | '&') (unary | structConstructor);
+unary = ('!' | '~' | '-' | '&') (unary | structConstructor);
 structConstructor = ( identifier "{"
 	{ identifier ":" expr "," }
 	[ identifier ":" expr ]
