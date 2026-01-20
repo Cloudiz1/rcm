@@ -1,0 +1,56 @@
+use crate::parser;
+
+#[derive(Debug, Clone)]
+pub enum Type {
+    Pointer {
+        referenced_type: Box<Type>,
+        size: usize,
+    },
+    Array {
+        t: Box<Type>,
+        count: Option<Box<parser::Expression>>,
+        size: Option<usize>,
+    },
+    Typedef {
+        name: String,
+        size: usize,
+    },
+    Int(usize),
+    UnsignedInt(usize),
+    Float(usize),
+    // Isize(usize),
+    // Usize(usize),
+    Bool(usize),
+    Void(usize),
+    // Str(usize),
+    Char(usize),
+}
+
+pub trait Size {
+    fn get_size(&self) -> Option<usize>; 
+    // fn calculate_size(&self) -> usize;
+}
+
+impl Size for Type {
+    fn get_size(&self) -> Option<usize> {
+        match *self {
+            Self::Pointer { referenced_type: _, size } => Some(size),
+            Self::Array { t: _, count: _, size } => size,
+            Self::Typedef { name: _, size } => Some(size),
+            Self::Int(size) => Some(size),
+            Self::UnsignedInt(size) => Some(size),
+            Self::Float(size) => Some(size),
+            Self::Bool(size) => Some(size),
+            Self::Void(size) => Some(size),
+            Self::Char(size) => Some(size),
+        }
+    }
+    //
+    // fn calculate_size(&self) -> usize {
+    //     match *self {
+    //         Self::Array { t, count, size } => {
+    //         }
+    //         _ => self.get_size(),
+    //     } 
+    // }
+}

@@ -50,8 +50,8 @@ pub enum Type {
     U32,
     I64,
     U64,
-    Isize,
-    Usize,
+    // Isize,
+    // Usize,
     F16,
     F32,
     F64,
@@ -116,17 +116,6 @@ pub struct Member {
     pub name: String,
     pub t: Type,
     pub public: bool,
-}
-
-// its repetitive to have the same struct for methods and functions but it makes my enum more
-// orgainzed and codegen have less code, so i think its worth it
-#[derive(Debug, Clone)]
-pub struct Method {
-    name: String,
-    return_type: Type,
-    parameters: Vec<Parameter>,
-    body: Box<Statement>,
-    public: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -206,8 +195,8 @@ impl Parser {
         types.insert("f16".to_owned(), Type::F16);
         types.insert("f32".to_owned(), Type::F32);
         types.insert("f64".to_owned(), Type::F64);
-        types.insert("isize".to_owned(), Type::Isize);
-        types.insert("usize".to_owned(), Type::Usize);
+        // types.insert("isize".to_owned(), Type::Isize);
+        // types.insert("usize".to_owned(), Type::Usize);
         types.insert("bool".to_owned(), Type::Bool);
         types.insert("void".to_owned(), Type::Void);
         types.insert("string".to_owned(), Type::Str);

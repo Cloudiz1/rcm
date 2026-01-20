@@ -5,6 +5,9 @@ pub mod lexer;
 pub mod parser;
 pub mod tac;
 
+// pub mod symbol;
+// pub mod types;
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() == 1 {
@@ -21,7 +24,7 @@ fn main() {
         return;
     };
 
-    println!("{:#?}", ast);
+    // println!("{:#?}", ast);
 
     let mut tac = tac::TAC::new();
     tac.codegen(ast);
