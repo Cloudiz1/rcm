@@ -16,6 +16,7 @@ pub enum Token {
     Colon,
     Equal,
     DotStar,
+    Underscore,
 
     // keywords
     Let,
@@ -362,6 +363,7 @@ impl Tokenizer {
             '%' => self.is_next_equal(Token::Percent, Token::PercentEqual),
             '!' => self.is_next_equal(Token::Bang, Token::BangEqual),
             '~' => Token::Tilde,
+            '_' => Token::Underscore,
             '^' => self.is_next_equal(Token::Caret, Token::CaretEqual),
             '|' => {
                 if self.is_double(c) {

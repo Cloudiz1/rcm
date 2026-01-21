@@ -24,7 +24,7 @@ fn main() {
         return;
     };
 
-    // println!("{:#?}", ast);
+    println!("{:#?}", ast);
 
     let mut tac = tac::TAC::new();
     tac.codegen(ast);
