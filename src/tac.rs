@@ -148,7 +148,7 @@ fn create_symbol_entry(statement: parser::Statement) -> (String, Symbol) {
         parser::Statement::StructDeclaration {
             name,
             members,
-            methods,
+            // methods,
             public,
         } => {
             // TODO: these two symbol tables need to be updated to check for ODR,
@@ -159,9 +159,9 @@ fn create_symbol_entry(statement: parser::Statement) -> (String, Symbol) {
             }
 
             let mut method_table: HashMap<String, Symbol> = HashMap::new();
-            for method in methods {
-                add_symbol(&mut method_table, *method);
-            }
+            // for method in methods {
+            //     add_symbol(&mut method_table, *method);
+            // }
 
             (
                 name.clone(),
@@ -220,6 +220,32 @@ impl TAC {
         return false;
     }
 
+    fn get_size(&self, t: parser::Type) -> usize {
+        match t {
+            parser::Type::Pointer(_) => 8,
+            parser::Type::Array { t, size } => {
+                let Some(count) = size else {
+                    unreachable!();
+                };
+
+                let type_size = self.get_size(*t);
+                return type_size * count;
+            }
+            // parser::Type::Array { t, size: _} => self.get_size(*t),
+            parser::Type::Int(val) => val,
+            parser::Type::UInt(val) => val,
+            parser::Type::Float(val) => val,
+            parser::Type::Bool => 1,
+            parser::Type::Char => 8,
+            // TODO: Write some helpers to access and modify self.sizes and call that here
+            // parser::Type::Typedef(val) => {
+            // }
+            // parser::Type::Void => 0,
+            parser::Type::Str => unimplemented!("can not get size of string"),
+            _ => unreachable!(),
+        }
+    }
+
     // fn get_size(self, t: parser::Type) -> usize {
     //     match t {
     //         parser::Type::Pointer(_) => 8,
@@ -271,48 +297,33 @@ impl TAC {
         self.get_current_table().insert(name, symbol);
     }
 
+    // generates TAC and does type checks
+    // return values or for type checks and flattening ast (the string refers to a required tmp variable)
     fn handle_expression(&mut self, expr: parser::Expression) -> (parser::Type, String) {
         match expr {
             // parser::Expression::Null => parser::Type::Pointer(Box::new(parser::Type::Void)),
-            parser::Expression::Int(val) => (parser::Type::I32, val.to_string()),
-            parser::Expression::Float(val) => (parser::Type::F64, val.to_string()),
+            parser::Expression::Int(val) => (parser::Type::Int(4), val.to_string()),
+            parser::Expression::Float(val) => (parser::Type::Float(8), val.to_string()),
             // TODO: I doubt these are quite right
             parser::Expression::Char(val) => (parser::Type::Char, val.to_string()),
             parser::Expression::String(val) => (parser::Type::Str, val.to_string()),
+
             parser::Expression::Bool(val) => (parser::Type::Bool, val.to_string()),
             parser::Expression::Unary { operator, member } => {
                 let (t, val) = self.handle_expression(*member);
-                let out = match operator {
-                    parser::Operator::Reference => {
-                        let tmp = std::format!("t{}", self.temporary_count);
-                        self.out.push_str(&std::format!("\t{} := &{}\n", tmp, val));
-                        (parser::Type::Pointer(Box::new(t)), tmp)
-                    }
-                    parser::Operator::Negate => {
-                        let tmp = std::format!("t{}", self.temporary_count);
-                        self.out.push_str(&std::format!("\t{} := -{}\n", tmp, val));
-                        (parser::Type::I32, tmp)
-                    }
-                    parser::Operator::BitwiseNot => {
-                        let tmp = std::format!("t{}", self.temporary_count);
-                        self.out.push_str(&std::format!("\t{} := ~{}\n", tmp, val));
-                        (parser::Type::I32, tmp)
-                    }
-                    parser::Operator::LogicalNot => {
-                        let tmp = std::format!("t{}", self.temporary_count);
-                        self.out.push_str(&std::format!("\t{} := !{}\n", tmp, val));
-                        (parser::Type::Bool, tmp)
-                    }
-                    parser::Operator::Dereference => {
-                        let tmp = std::format!("t{}", self.temporary_count);
-                        self.out.push_str(&std::format!("\t{} := *{}\n", tmp, val));
-                        (parser::Type::Bool, tmp)
-                    }
+                let (expr_type, operator) = match operator {
+                    parser::Operator::Reference => (parser::Type::Pointer(Box::new(t)), "&"),
+                    parser::Operator::Negate => (parser::Type::Int(4), "-"),
+                    parser::Operator::BitwiseNot => (parser::Type::Int(4), "~"),
+                    parser::Operator::LogicalNot => (parser::Type::Bool, "!"),
+                    parser::Operator::Dereference => (parser::Type::Bool, "*"),
                     _ => unreachable!(),
                 };
 
+                let tmp = std::format!("t{}", self.temporary_count);
+                self.out.push_str(&std::format!("\t{} := {}{}\n", tmp, operator, val));
                 self.temporary_count += 1;
-                return out;
+                (expr_type, tmp)
             }
             parser::Expression::Binary { lhs, operator, rhs } => {
                 let (tlhs, lval) = self.handle_expression(*lhs);
@@ -343,7 +354,7 @@ impl TAC {
                     | parser::Operator::BitwiseAnd
                     | parser::Operator::BitwiseXOr
                     | parser::Operator::BitwiseLeftShift
-                    | parser::Operator::BitwiseRightShift => (parser::Type::I32, temp),
+                    | parser::Operator::BitwiseRightShift => (parser::Type::Int(4), temp),
                     parser::Operator::LogicalOr
                     | parser::Operator::LogicalAnd
                     | parser::Operator::Equal

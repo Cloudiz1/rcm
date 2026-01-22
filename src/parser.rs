@@ -39,22 +39,25 @@ pub enum Type {
     Pointer(Box<Type>),
     Array {
         t: Box<Type>,
-        size: Option<usize>,
+        size: Option<usize>, // this will always be known when passed to TAC
     },
     Typedef(String),
-    I8,
-    U8,
-    I16,
-    U16,
-    I32,
-    U32,
-    I64,
-    U64,
+    Int(usize),
+    UInt(usize),
+    Float(usize),
+    // I8,
+    // U8,
+    // I16,
+    // U16,
+    // I32,
+    // U32,
+    // I64,
+    // U64,
     // Isize,
     // Usize,
-    F16,
-    F32,
-    F64,
+    // F16,
+    // F32,
+    // F64,
     Bool,
     Void,
     Str,
@@ -159,7 +162,7 @@ pub enum Statement {
     StructDeclaration {
         name: String,
         members: Vec<Box<Statement>>, // vec of members
-        methods: Vec<Box<Statement>>, // vec of function decs.
+        // methods: Vec<Box<Statement>>, // vec of function decs.
         public: bool,
     },
     IfStatement {
@@ -184,17 +187,17 @@ pub struct Parser {
 impl Parser {
     pub fn new() -> Self {
         let mut types: HashMap<String, Type> = HashMap::new();
-        types.insert("i8".to_owned(), Type::I8);
-        types.insert("u8".to_owned(), Type::U8);
-        types.insert("i16".to_owned(), Type::I16);
-        types.insert("u16".to_owned(), Type::U16);
-        types.insert("i32".to_owned(), Type::I32);
-        types.insert("u32".to_owned(), Type::U32);
-        types.insert("i64".to_owned(), Type::I64);
-        types.insert("u64".to_owned(), Type::U64);
-        types.insert("f16".to_owned(), Type::F16);
-        types.insert("f32".to_owned(), Type::F32);
-        types.insert("f64".to_owned(), Type::F64);
+        types.insert("i8".to_owned(), Type::Int(1));
+        types.insert("u8".to_owned(), Type::UInt(1));
+        types.insert("i16".to_owned(), Type::Int(2));
+        types.insert("u16".to_owned(), Type::UInt(2));
+        types.insert("i32".to_owned(), Type::Int(4));
+        types.insert("u32".to_owned(), Type::UInt(4));
+        types.insert("i64".to_owned(), Type::Int(8));
+        types.insert("u64".to_owned(), Type::UInt(8));
+        types.insert("f16".to_owned(), Type::Float(2));
+        types.insert("f32".to_owned(), Type::Float(4));
+        types.insert("f64".to_owned(), Type::Float(8));
         // types.insert("isize".to_owned(), Type::Isize);
         // types.insert("usize".to_owned(), Type::Usize);
         types.insert("bool".to_owned(), Type::Bool);
@@ -436,19 +439,20 @@ impl Parser {
 
 // statements
 impl Parser {
-    fn declaration(&mut self) -> Statement {
+    // i know the vec is silly but its for struct method desugaring
+    fn declaration(&mut self) -> Vec<Statement> {
         if self.current() == lexer::Token::Pub {
             self.advance();
         }
 
         let out = match self.current() {
-            lexer::Token::Fn => self.function_declaration(),
+            lexer::Token::Fn => vec![self.function_declaration(None)],
             lexer::Token::Struct => self.struct_declaration(),
-            lexer::Token::Enum => self.enum_declaration(),
-            lexer::Token::Let | lexer::Token::Const => self.variable_declaration(true),
+            lexer::Token::Enum => vec![self.enum_declaration()],
+            lexer::Token::Let | lexer::Token::Const => vec![self.variable_declaration(true)],
             _ => {
                 self.error("unrecognized top level expression");
-                Statement::ParseError
+                vec![Statement::ParseError]
             }
         };
 
@@ -460,12 +464,13 @@ impl Parser {
         return out;
     }
 
-    fn function_declaration(&mut self) -> Statement {
+    // option for even more struct desugaring
+    fn function_declaration(&mut self, struct_name: Option<String>) -> Statement {
         let public = self.is_public();
 
         self.advance(); // consume fn token
         let mut identifier = self.primary();
-        let name =
+        let mut name =
             self.unwrap_identifier(identifier, "expected function name in after keyword 'fn'");
 
         self.expect(lexer::Token::LParen, "expected '(' after function name.");
@@ -503,6 +508,10 @@ impl Parser {
 
         let return_type = self.parse_type();
 
+        if let Some(n) = struct_name {
+            name = std::format!("{}@{}", n, name);
+        }
+
         let body = Box::new(self.block());
         Statement::FunctionDeclaration {
             name,
@@ -514,7 +523,7 @@ impl Parser {
     }
 
     // Currently allows zero-sized structs, not sure if i want this or not
-    fn struct_declaration(&mut self) -> Statement {
+    fn struct_declaration(&mut self) -> Vec<Statement> {
         let struct_public = self.is_public();
         self.advance(); // consume struct token
 
@@ -523,7 +532,7 @@ impl Parser {
             self.unwrap_identifier(identifier, "expected struct name after struct keyword.");
 
         if !self.expect(lexer::Token::LCurly, "expected body of struct.") {
-            return Statement::ParseError;
+            return vec![Statement::ParseError];
         }
 
         let mut members: Vec<Box<Statement>> = Vec::new();
@@ -565,7 +574,7 @@ impl Parser {
             };
         }
 
-        let mut methods: Vec<Box<Statement>> = Vec::new();
+        let mut methods: Vec<Statement> = Vec::new();
         loop {
             if self.current() == lexer::Token::Pub {
                 self.advance();
@@ -573,7 +582,7 @@ impl Parser {
             }
 
             if self.current() == lexer::Token::Fn {
-                methods.push(Box::new(self.function_declaration()));
+                methods.push(self.function_declaration(Some(struct_name.clone())));
             } else {
                 break;
             }
@@ -586,17 +595,16 @@ impl Parser {
             _ => {}
         }
 
-        self.expect(
-            lexer::Token::RCurly,
-            "expected closing curly on struct declaration.",
-        );
+        self.expect(lexer::Token::RCurly, "expected closing curly on struct declaration.");
 
-        Statement::StructDeclaration {
+        methods.push(Statement::StructDeclaration {
             name: struct_name,
             members,
-            methods,
+            // methods,
             public: struct_public,
-        }
+        });
+
+        return methods;
     }
 
     fn enum_declaration(&mut self) -> Statement {
@@ -836,7 +844,9 @@ impl Parser {
 
         let mut program: Vec<Box<Statement>> = Vec::new();
         while !self.at_end() && self.current() != lexer::Token::EOF {
-            program.push(Box::new(self.declaration()));
+            for statement in self.declaration() {
+                program.push(Box::new(statement));
+            }
         }
 
         Some(Statement::Program(program))
@@ -1119,6 +1129,20 @@ impl Parser {
                 lexer::Token::Dot => {
                     self.advance();
                     let rhs = self.primary();
+
+                    // // desugar foo.bar() -> foo.bar(*foo);
+                    // match rhs {
+                    //     Expression::FunctionCall { identifier, mut args } => {
+                    //         args.insert(0, Box::new( Expression::Unary { 
+                    //             operator: Operator::Reference,
+                    //             member: Box::new(expr.clone()),
+                    //         }));
+                    //
+                    //         rhs = Expression::FunctionCall { identifier, args } 
+                    //     },
+                    //     _ => {}
+                    // }
+
                     self.create_binary(expr, Operator::Dot, rhs)
                 }
                 lexer::Token::LParen => {
@@ -1140,6 +1164,18 @@ impl Parser {
                         }
                         break;
                     }
+
+                    // Desugaring!
+                    // foo.bar() -> foo.bar(&foo)
+                    match expr.clone() {
+                        Expression::Binary { lhs, operator: _, rhs: _ } => {
+                            args.insert(0, Box::new(Expression::Unary { 
+                                operator: Operator::Reference, 
+                                member: lhs.clone(),
+                            }))
+                        }
+                        _ => {}
+                    };
 
                     // consume RParen
                     self.advance();
