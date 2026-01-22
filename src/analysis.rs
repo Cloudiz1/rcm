@@ -1,5 +1,4 @@
 use crate::parser;
-use std::cmp::max;
 use std::collections::HashMap;
 use std::vec::Vec;
 
@@ -22,13 +21,13 @@ pub enum Symbol {
     Enum {
         varients: Vec<String>,
         public: bool,
-        typedef: parser::Type,
+        // typedef: parser::Type,
     },
     Struct {
         members: HashMap<String, Symbol>, // Symbol::Variable
         // methods: HashMap<String, Symbol>, // Symbol::Function
         public: bool,
-        typedef: parser::Type,
+        // typedef: parser::Type,
     },
 }
 
@@ -75,7 +74,7 @@ impl Type for Symbol {
 
 pub struct Analyzer {
     symbol_tables: Vec<HashMap<String, Symbol>>,
-    sizes: HashMap<String, usize>,
+    sizes: HashMap<parser::Type, usize>,
 }
 
 fn add_symbol(table: &mut HashMap<String, Symbol>, statement: parser::Statement) {
@@ -147,7 +146,7 @@ fn create_symbol_entry(statement: parser::Statement) -> (String, Symbol) {
                 add_symbol(&mut member_table, *member);
             }
 
-            let mut method_table: HashMap<String, Symbol> = HashMap::new();
+            // let mut method_table: HashMap<String, Symbol> = HashMap::new();
             // for method in methods {
             //     add_symbol(&mut method_table, *method);
             // }
@@ -158,7 +157,7 @@ fn create_symbol_entry(statement: parser::Statement) -> (String, Symbol) {
                     members: member_table,
                     // methods: method_table,
                     public,
-                    typedef: parser::Type::Typedef(name),
+                    // typedef: parser::Type::Typedef(name),
                 },
             )
         }
@@ -168,9 +167,24 @@ fn create_symbol_entry(statement: parser::Statement) -> (String, Symbol) {
 
 impl Analyzer {
     pub fn new() -> Self {
+        let mut sizes: HashMap<parser::Type, usize> = HashMap::new();
+        sizes.insert(parser::Type::I8, 1);
+        sizes.insert(parser::Type::U8, 1);
+        sizes.insert(parser::Type::I16, 2);
+        sizes.insert(parser::Type::U16, 2);
+        sizes.insert(parser::Type::I32, 4);
+        sizes.insert(parser::Type::U32, 4);
+        sizes.insert(parser::Type::I64, 8);
+        sizes.insert(parser::Type::U64, 8);
+        sizes.insert(parser::Type::F16, 2);
+        sizes.insert(parser::Type::F32, 4);
+        sizes.insert(parser::Type::F64, 8);
+        sizes.insert(parser::Type::Bool, 1);
+        sizes.insert(parser::Type::Char, 4);
+        
         Self {
             symbol_tables: Vec::new(),
-            sizes: HashMap::new(),
+            sizes,
         }
     }
 
@@ -217,36 +231,107 @@ impl Analyzer {
 
         self.get_current_table().insert(name, symbol);
     }
-    
-    // only works with numbers
-    // TODO: UInt
-    fn get_common_type(&mut self, lhs: parser::Type, rhs: parser::Type) -> parser::Type {
-        match lhs {
-            parser::Type::Int(lhs_int_size) => {
-                match rhs {
-                    parser::Type::Int(rhs_int_size) => return parser::Type::Int(max(lhs_int_size, rhs_int_size)),
-                    parser::Type::Float(rhs_float_size) => return parser::Type::Float(rhs_float_size),
-                    _ => {}
-                }
-            }
-            parser::Type::Float(lhs_float_size) => {
-                match rhs {
-                    parser::Type::Int(_) => return parser::Type::Float(lhs_float_size),
-                    parser::Type::Float(rhs_float_size) => return parser::Type::Float(max(lhs_float_size, rhs_float_size)),
-                    _ => {}
-                }
-            }
-            _ => {}
-        };
 
-        panic!("incompatible types.");
+    fn calculate_symbol_size(&mut self, symbol: Symbol) -> usize {
+        match symbol {
+            Symbol::Struct { members, public: _ } => {
+                let mut sum: usize = 0;
+                for member in members.values().clone().collect::<Vec<&Symbol>>() {
+                    sum += self.calculate_symbol_size(member.clone()) 
+                }
+
+                return sum;
+            }
+            Symbol::Variable { variable_type, constant: _, public : _ } => {
+                let Some(member_type) = variable_type else {
+                    unreachable!();
+                };
+
+                return self.get_size(member_type);
+            }
+            _ => panic!("can not calculate symbol size"),
+        }
+    }
+
+    // also inserts sizes of unknown structs
+    fn get_size(&mut self, t: parser::Type) -> usize {
+        if let Some(size) = self.sizes.get(&t.clone()) {
+            return size.clone();
+        }
+
+        match t.clone() {
+            parser::Type::Typedef(identifier) => {
+                let symbol = self.get_symbol(identifier);
+                let new_size = self.calculate_symbol_size(symbol);
+                self.sizes.insert(t, new_size);
+                return new_size;
+            }
+            _ => panic!("unknown size"),
+        }
+    }
+    
+    // TODO: UInt
+    //
+    // only works with numbers
+    // fn get_common_type(&self, lhs: parser::Type, rhs: parser::Type) -> parser::Type {
+    //     match lhs {
+    //         parser::Type::Int(lhs_int_size) => {
+    //             match rhs {
+    //                 parser::Type::Int(rhs_int_size) => return parser::Type::Int(max(lhs_int_size, rhs_int_size)),
+    //                 parser::Type::Float(rhs_float_size) => return parser::Type::Float(rhs_float_size),
+    //                 _ => {}
+    //             }
+    //         }
+    //         parser::Type::Float(lhs_float_size) => {
+    //             match rhs {
+    //                 parser::Type::Int(_) => return parser::Type::Float(lhs_float_size),
+    //                 parser::Type::Float(rhs_float_size) => return parser::Type::Float(max(lhs_float_size, rhs_float_size)),
+    //                 _ => {}
+    //             }
+    //         }
+    //         _ => {}
+    //     };
+    //
+    //     panic!("incompatible types.");
+    // }
+
+    fn allowed_implicit_conversion(&mut self, lhs: parser::Type, rhs: parser::Type) -> parser::Type {
+        if variant_eq(&lhs, &rhs) {
+            if self.get_size(lhs.clone()) > self.get_size(rhs.clone()) {
+                return lhs;
+            }
+
+            return rhs;
+        }
+
+        const NUMBERS: [parser::Type; 11] = [
+            parser::Type::I8,
+            parser::Type::U8,
+            parser::Type::I16,
+            parser::Type::U16,
+            parser::Type::I32,
+            parser::Type::U32,
+            parser::Type::I64,
+            parser::Type::U64,
+            parser::Type::F16,
+            parser::Type::F32,
+            parser::Type::F64,
+        ];
+
+        // the actual type here doesnt *really* matter, this function only serves to check if you
+        // CAN do that operation, the casts will be calculated during IR gen
+        if NUMBERS.contains(&lhs) && NUMBERS.contains(&rhs) {
+            return parser::Type::F64;
+        }
+
+        panic!("unhandled case");
     }
 
     fn get_type(&mut self, expr: parser::Expression) -> parser::Type {
         match expr {
             parser::Expression::Null => parser::Type::Void,
-            parser::Expression::Int(_) => parser::Type::Int(4),
-            parser::Expression::Float(_) => parser::Type::Float(8),
+            parser::Expression::Int(_) => parser::Type::I32,
+            parser::Expression::Float(_) => parser::Type::F64,
             parser::Expression::String(_) => unimplemented!(),
             parser::Expression::Char(_) => parser::Type::Char,
             parser::Expression::Bool(_) => parser::Type::Bool,
@@ -256,9 +341,9 @@ impl Analyzer {
             }
             parser::Expression::Unary { operator, member } => {
                 match operator {
-                    parser::Operator::BitwiseNot => parser::Type::Int(4),
+                    parser::Operator::BitwiseNot => parser::Type::I32,
                     parser::Operator::LogicalNot => parser::Type::Bool,
-                    parser::Operator::Reference => parser::Type::Int(8),
+                    parser::Operator::Reference => parser::Type::I32,
                     parser::Operator::Dereference => {
                         self.get_type(*member)
                     }
@@ -291,7 +376,7 @@ impl Analyzer {
                     return lhs_type;
                 }
 
-                return self.get_common_type(lhs_type, rhs_type);
+                return self.allowed_implicit_conversion(lhs_type, rhs_type);
             }
             parser::Expression::Assignment { identifier, value } => {
                 let lhs_type = self.get_type(*identifier);
@@ -301,7 +386,12 @@ impl Analyzer {
                     return lhs_type;
                 }
 
-                return self.get_common_type(lhs_type, rhs_type);
+                // TODO: type assignment should be stricter, assignment type should overwrite
+                
+                // match lhs_type {
+                //     parser::Type::
+                // }
+                unimplemented!("assignement casts");
             }
             parser::Expression::FunctionCall { identifier, args: _ } => self.get_type(*identifier),
             parser::Expression::ArrayAccess { identifier, index: _ } => self.get_type(*identifier),
@@ -367,9 +457,7 @@ impl Analyzer {
                 if let Some(rhs) = initial_value.clone() {
                     let rhs_type = self.get_type(*rhs);
                     if let Some(var_type) = variable_type.clone() {
-                        if !variant_eq(&rhs_type, &var_type) {
-                            panic!("type of lhs does not match rhs.");
-                        }
+                        self.allowed_implicit_conversion(var_type, rhs_type);
                     } else {
                         variable_type = Some(rhs_type);
                     }
@@ -432,7 +520,7 @@ impl Analyzer {
     }
 
     // does semantic analysis too
-    pub fn verify(&mut self, ast: Vec<parser::Statement>) -> HashMap<String, usize> {
+    pub fn verify(&mut self, ast: Vec<parser::Statement>) -> HashMap<parser::Type, usize> {
         for statement in ast {
             self.analyze(statement, None);
         }

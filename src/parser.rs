@@ -34,7 +34,7 @@ pub enum Operator {
     Dot,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     Pointer(Box<Type>),
     Array {
@@ -42,22 +42,22 @@ pub enum Type {
         size: Option<usize>, // this will always be known when passed to TAC
     },
     Typedef(String),
-    Int(usize),
-    UInt(usize),
-    Float(usize),
-    // I8,
-    // U8,
-    // I16,
-    // U16,
-    // I32,
-    // U32,
-    // I64,
-    // U64,
+    // Int(usize),
+    // UInt(usize),
+    // Float(usize),
+    I8,
+    U8,
+    I16,
+    U16,
+    I32,
+    U32,
+    I64,
+    U64,
     // Isize,
     // Usize,
-    // F16,
-    // F32,
-    // F64,
+    F16,
+    F32,
+    F64,
     Bool,
     Void,
     Str,
@@ -187,17 +187,35 @@ pub struct Parser {
 impl Parser {
     pub fn new() -> Self {
         let mut types: HashMap<String, Type> = HashMap::new();
-        types.insert("i8".to_owned(), Type::Int(1));
-        types.insert("u8".to_owned(), Type::UInt(1));
-        types.insert("i16".to_owned(), Type::Int(2));
-        types.insert("u16".to_owned(), Type::UInt(2));
-        types.insert("i32".to_owned(), Type::Int(4));
-        types.insert("u32".to_owned(), Type::UInt(4));
-        types.insert("i64".to_owned(), Type::Int(8));
-        types.insert("u64".to_owned(), Type::UInt(8));
-        types.insert("f16".to_owned(), Type::Float(2));
-        types.insert("f32".to_owned(), Type::Float(4));
-        types.insert("f64".to_owned(), Type::Float(8));
+        // types.insert("i8".to_owned(), Type::Int(1));
+        // types.insert("u8".to_owned(), Type::UInt(1));
+        // types.insert("i16".to_owned(), Type::Int(2));
+        // types.insert("u16".to_owned(), Type::UInt(2));
+        // types.insert("i32".to_owned(), Type::Int(4));
+        // types.insert("u32".to_owned(), Type::UInt(4));
+        // types.insert("i64".to_owned(), Type::Int(8));
+        // types.insert("u64".to_owned(), Type::UInt(8));
+        // types.insert("f16".to_owned(), Type::Float(2));
+        // types.insert("f32".to_owned(), Type::Float(4));
+        // types.insert("f64".to_owned(), Type::Float(8));
+        // // types.insert("isize".to_owned(), Type::Isize);
+        // // types.insert("usize".to_owned(), Type::Usize);
+        // types.insert("bool".to_owned(), Type::Bool);
+        // types.insert("void".to_owned(), Type::Void);
+        // types.insert("string".to_owned(), Type::Str);
+        // types.insert("char".to_owned(), Type::Char);
+
+        types.insert("i8".to_owned(), Type::I8);
+        types.insert("u8".to_owned(), Type::U8);
+        types.insert("i16".to_owned(), Type::I16);
+        types.insert("u16".to_owned(), Type::U16);
+        types.insert("i32".to_owned(), Type::I32);
+        types.insert("u32".to_owned(), Type::U32);
+        types.insert("i64".to_owned(), Type::I64);
+        types.insert("u64".to_owned(), Type::U64);
+        types.insert("f16".to_owned(), Type::F16);
+        types.insert("f32".to_owned(), Type::F32);
+        types.insert("f64".to_owned(), Type::F64);
         // types.insert("isize".to_owned(), Type::Isize);
         // types.insert("usize".to_owned(), Type::Usize);
         types.insert("bool".to_owned(), Type::Bool);
