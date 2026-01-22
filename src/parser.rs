@@ -34,7 +34,7 @@ pub enum Operator {
     Dot,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Pointer(Box<Type>),
     Array {
@@ -237,13 +237,16 @@ impl Parser {
         self.input[self.i].token_type.clone()
     }
 
-    // fn peek(&self) -> lexer::Token {
-    //     if self.i >= self.input.len() - 1 {
-    //         panic!("Parser.peek() tried to access out of bounds index.");
-    //     }
-    //
-    //     self.input[self.i + 1].token_type.clone()
-    // }
+    // can peek backwards too!
+    fn peek(&self, index: i32) -> Option<lexer::Token> {
+        let i = self.i as i32 + index - 1;
+        
+        if i >= self.input.len() as i32 || i < 0 {
+            return None;
+        }
+
+        Some(self.input[i as usize].token_type.clone())
+    }
 
     fn consume(&mut self) -> lexer::Token {
         self.i += 1;
@@ -528,8 +531,7 @@ impl Parser {
         self.advance(); // consume struct token
 
         let identifier = self.primary();
-        let struct_name =
-            self.unwrap_identifier(identifier, "expected struct name after struct keyword.");
+        let struct_name = self.unwrap_identifier(identifier, "expected struct name after struct keyword.");
 
         if !self.expect(lexer::Token::LCurly, "expected body of struct.") {
             return vec![Statement::ParseError];
@@ -744,10 +746,7 @@ impl Parser {
             variable_type = Some(self.get_implicit_array_length(t, initial_value.clone()));
         }
 
-        self.expect(
-            lexer::Token::Semicolon,
-            "expected semicolon after variable declaration.",
-        );
+        self.expect(lexer::Token::Semicolon, "expected semicolon after variable declaration.");
 
         return Statement::VariableDeclaration {
             identifier,
@@ -839,18 +838,21 @@ impl Parser {
 
 // expressions
 impl Parser {
-    pub fn parse(&mut self, input: Vec<lexer::DebugToken>) -> Option<Statement> {
+    pub fn parse(&mut self, input: Vec<lexer::DebugToken>) -> Option<Vec<Statement>> {
         self.input = input;
 
-        let mut program: Vec<Box<Statement>> = Vec::new();
+        // let mut program: Vec<Box<Statement>> = Vec::new();
+        let mut program: Vec<Statement> = Vec::new();
         while !self.at_end() && self.current() != lexer::Token::EOF {
             for statement in self.declaration() {
-                program.push(Box::new(statement));
+                // program.push(Box::new(statement));
+                program.push(statement);
             }
         }
 
-        Some(Statement::Program(program))
+        // Some(Statement::Program(program))
         // Some(program)
+        Some(program)
     }
 
     fn expression(&mut self) -> Expression {
@@ -1065,6 +1067,16 @@ impl Parser {
 
         match expr.clone() {
             Expression::Identifier(identifier) => {
+                // ambigious syntax, make sure this isnt the pattern
+                // if foo {
+                //      ...
+                // }
+                if let Some(token) = self.peek(-1) {
+                    if token == lexer::Token::If {
+                        return expr;
+                    }
+                }
+
                 let mut members: Vec<Box<Expression>> = Vec::new();
                 let mut comma: bool = true;
 
@@ -1208,10 +1220,12 @@ impl Parser {
     fn primary(&mut self) -> Expression {
         let token = self.consume();
         match token {
+            lexer::Token::Null => Expression::Null,
             lexer::Token::IntLit(val) => Expression::Int(val),
             lexer::Token::FloatLit(val) => Expression::Float(val),
             lexer::Token::Bool(val) => Expression::Bool(val),
             lexer::Token::StringLit(val) => Expression::String(val),
+            lexer::Token::Char(val) => Expression::Char(val),
             lexer::Token::Identifier(val) => Expression::Identifier(val),
             lexer::Token::LParen => {
                 let expr = self.expression();

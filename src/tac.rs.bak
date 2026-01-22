@@ -21,7 +21,7 @@ enum Symbol {
     },
     Struct {
         members: HashMap<String, Symbol>, // Symbol::Variable
-        methods: HashMap<String, Symbol>, // Symbol::Function
+        // methods: HashMap<String, Symbol>, // Symbol::Function
         public: bool,
         typedef: parser::Type,
     },
@@ -52,7 +52,7 @@ impl Type for Symbol {
             } => Some((*typedef).clone()),
             Symbol::Struct {
                 members: _,
-                methods: _,
+                // methods: _,
                 public: _,
                 typedef,
             } => Some((*typedef).clone()),
@@ -167,7 +167,7 @@ fn create_symbol_entry(statement: parser::Statement) -> (String, Symbol) {
                 name.clone(),
                 Symbol::Struct {
                     members: member_table,
-                    methods: method_table,
+                    // methods: method_table,
                     public,
                     typedef: parser::Type::Typedef(name),
                 },

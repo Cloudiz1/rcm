@@ -3,7 +3,8 @@ use std::fs;
 
 pub mod lexer;
 pub mod parser;
-pub mod tac;
+pub mod analysis;
+// pub mod tac;
 
 // pub mod symbol;
 // pub mod types;
@@ -24,8 +25,11 @@ fn main() {
         return;
     };
 
-    println!("{:#?}", ast);
+    // println!("{:#?}", ast);
+    let mut analyzer = analysis::Analyzer::new();
+    let globals = analyzer.get_globals(ast.clone());
+    analyzer.verify(ast);
 
-    let mut tac = tac::TAC::new();
-    tac.codegen(ast);
+    // let mut tac = tac::TAC::new();
+    // tac.codegen(ast);
 }
