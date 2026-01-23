@@ -72,9 +72,36 @@ impl Type for Symbol {
     }
 }
 
-pub struct Analyzer {
+pub struct Generator {
     symbol_tables: Vec<HashMap<String, Symbol>>,
     sizes: HashMap<parser::Type, usize>,
+    l_count: usize,
+    t_count: usize,
+    out: String,
+}
+
+fn get_operator(operator: parser::Operator) -> &'static str {
+    match operator {
+        parser::Operator::Add => "+",
+        parser::Operator::Subtract => "-",
+        parser::Operator::Multiply => "*",
+        parser::Operator::Divide => "/",
+        parser::Operator::Modulus => "%",
+        parser::Operator::BitwiseOr => "|",
+        parser::Operator::BitwiseXOr => "^",
+        parser::Operator::BitwiseAnd => "&",
+        parser::Operator::BitwiseLeftShift => "<<",
+        parser::Operator::BitwiseRightShift => ">>",
+        parser::Operator::LogicalOr => "||",
+        parser::Operator::LogicalAnd => "&&",
+        parser::Operator::Equal => "==",
+        parser::Operator::NotEqual => "!=",
+        parser::Operator::LessThan => "<",
+        parser::Operator::GreaterThan => ">",
+        parser::Operator::LessThanEqual => "<=",
+        parser::Operator::GreaterThanEqual => ">=",
+        _ => panic!("unrecognized operaator"),
+    }
 }
 
 fn add_symbol(table: &mut HashMap<String, Symbol>, statement: parser::Statement) {
@@ -165,7 +192,7 @@ fn create_symbol_entry(statement: parser::Statement) -> (String, Symbol) {
     }
 }
 
-impl Analyzer {
+impl Generator {
     pub fn new() -> Self {
         let mut sizes: HashMap<parser::Type, usize> = HashMap::new();
         sizes.insert(parser::Type::I8, 1);
@@ -185,6 +212,9 @@ impl Analyzer {
         Self {
             symbol_tables: Vec::new(),
             sizes,
+            l_count: 0,
+            t_count: 0,
+            out: String::new(),
         }
     }
 
@@ -348,7 +378,7 @@ impl Analyzer {
                         self.get_type(*member)
                     }
                     _ => panic!("unexpected operator in unary expression. found: {:?}", operator),
-                }
+}
             }
             parser::Expression::Binary { lhs, operator, rhs } => {
                 let lhs_type = self.get_type(*lhs); 
@@ -510,21 +540,124 @@ impl Analyzer {
         }
     }
 
-    pub fn get_globals(&mut self, ast: Vec<parser::Statement>) -> HashMap<String, Symbol> {
-        self.add_table();
-        for statement in ast {
-            self.add_symbol(statement);     
-        }
-
-        return self.symbol_tables[0].clone();
+    fn new_tmp(&mut self) -> String {
+        self.t_count += 1;
+        std::format!("t{}", self.t_count - 1)
     }
 
-    // does semantic analysis too
-    pub fn verify(&mut self, ast: Vec<parser::Statement>) -> HashMap<parser::Type, usize> {
+    fn tac_expr(&mut self, expr: parser::Expression) -> String {
+        match expr {
+            parser::Expression::Int(val) => val.to_string(),
+            parser::Expression::Float(val) => val.to_string(),
+            parser::Expression::Bool(val) => val.to_string(),
+            parser::Expression::Identifier(val) => val,
+            parser::Expression::Unary { operator, member } => {
+                let nval = self.tac_expr(*member);
+                let tmp = self.new_tmp();
+                
+                self.out.push_str(&std::format!("\t{} := {}{}\n", tmp, get_operator(operator), nval));
+                return tmp;
+            }
+            parser::Expression::Binary { lhs, operator, rhs } => {
+                let lval = self.tac_expr(*lhs);
+                let rval = self.tac_expr(*rhs);
+                
+                let tmp = self.new_tmp();
+                self.out.push_str(&std::format!("\t{} := {} {} {}\n", tmp, lval, get_operator(operator), rval));
+                return tmp;
+            }
+            parser::Expression::FunctionCall { identifier, args } => {
+                match *identifier {
+                    parser::Expression::Identifier(val) => {
+                        let tmp = self.new_tmp();
+                        self.out.push_str(&std::format!("\t{} := CALL {}\n", tmp, val));
+                        return tmp;
+                    }
+                    _ => self.tac_expr(*identifier)
+                }
+            }
+            parser::Expression::Assignment { identifier, value } => {
+                let rval = self.tac_expr(*value);
+                let lhs = self.tac_expr(*identifier);
+                self.out.push_str(&std::format!("\t{} := {}\n", lhs, rval));
+                return "".to_owned();
+            }
+            parser::Expression::Null => unimplemented!(), 
+            parser::Expression::Char(_) => unimplemented!(), 
+            parser::Expression::String(_) => unimplemented!(), 
+            parser::Expression::ArrayAccess {
+                identifier,
+                index,
+            } => unimplemented!(), 
+            // TODO: again, may remove the idea of this entirely and do it through desugaring  
+            parser::Expression::ArrayConstructor { values } => unimplemented!(),
+            parser::Expression::StructMember { identifier, val } => unimplemented!(),
+            parser::Expression::StructConstructor { identifier, members } => unimplemented!(),
+        }
+    }
+
+    fn tac_gen(&mut self, statement: parser::Statement) {
+        match statement {
+            parser::Statement::FunctionDeclaration { 
+                name, 
+                return_type: _, 
+                parameters: _, 
+                body, 
+                public: _ 
+            } => {
+                let label = std::format!("L{}:\n", self.l_count);
+                self.l_count += 1;
+                self.out.push_str(&label);
+                self.tac_gen(*body); 
+            }
+            parser::Statement::Block(statements) => {
+                for s in statements {
+                    self.tac_gen(*s);
+                }
+            }
+            parser::Statement::VariableDeclaration { 
+                identifier, 
+                variable_type, 
+                initial_value, 
+                constant, 
+                public, 
+                global 
+            } => {
+                if let Some(s) = initial_value {
+                    let tmp = self.tac_expr(*s);
+                    self.out.push_str(&std::format!("\t{} := {}\n", identifier, tmp));
+                } else {
+                    self.out.push_str(&identifier);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn get_globals(&mut self, ast: Vec<parser::Statement>) {
+        self.add_table();
+        for statement in ast {
+            self.add_symbol(statement);
+        }
+    }
+
+    fn semantic_analysis(&mut self, ast: Vec<parser::Statement>) {
         for statement in ast {
             self.analyze(statement, None);
         }
+    }
 
-        return self.sizes.clone();
+    fn codegen(&mut self, ast: Vec<parser::Statement>) {
+        for statement in ast {
+            self.tac_gen(statement);
+        }
+
+        println!("{}", self.out);
+    }
+
+    pub fn generate(&mut self, ast: Vec<parser::Statement>) {
+        self.get_globals(ast.clone());
+        self.semantic_analysis(ast.clone());
+        self.codegen(ast);
     }
 }

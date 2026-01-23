@@ -1,0 +1,4 @@
+pub fn main() void {
+	let a: i32 = 1 + 2 * 3;
+	let b = a + 2;
+}
