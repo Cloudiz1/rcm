@@ -124,7 +124,7 @@ pub struct Member {
 #[derive(Debug, Clone)]
 pub enum Statement {
     ParseError, // used for panic mode
-    Program(Vec<Box<Statement>>),
+    // Program(Vec<Box<Statement>>),
     ExpressionStatement(Box<Expression>),
     Block(Vec<Box<Statement>>),
     VariableDeclaration {
@@ -140,10 +140,10 @@ pub enum Statement {
         varients: Vec<String>,
         public: bool,
     },
-    Parameter {
-        name: String,
-        t: Type,
-    },
+    // Parameter {
+    //     name: String,
+    //     t: Type,
+    // },
     Return {
         value: Box<Expression>,
     },
@@ -170,6 +170,9 @@ pub enum Statement {
         block: Box<Statement>,
         alt: Option<Box<Statement>>,
     },
+    // ElseStatement {
+    //     body: Box<Statement>,
+    // },
     WhileStatement {
         condition: Box<Expression>,
         block: Box<Statement>,
@@ -823,6 +826,11 @@ impl Parser {
             if self.current() == lexer::Token::If {
                 alt = Some(Box::new(self.if_statement()));
             } else {
+                // let else_block = Statement::ElseStatement { 
+                //     body: Box::new(self.block()),
+                // };
+
+                // alt = Some(Box::new(else_block));
                 alt = Some(Box::new(self.block()));
             }
         }

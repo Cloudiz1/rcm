@@ -25,7 +25,7 @@ fn main() {
         return;
     };
 
-    // println!("{:#?}", ast);
+    dbg!(&ast);
     let mut codegen = ir::Generator::new();
     let tac = codegen.generate(ast.clone());
 

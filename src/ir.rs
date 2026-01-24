@@ -75,7 +75,10 @@ impl Type for Symbol {
 pub struct Generator {
     symbol_tables: Vec<HashMap<String, Symbol>>,
     sizes: HashMap<parser::Type, usize>,
-    l_count: usize,
+    if_branch_count: usize,
+    else_branch_count: usize,
+    while_loop_count: usize,
+    // l_count: usize,
     t_count: usize,
     out: String,
 }
@@ -212,7 +215,10 @@ impl Generator {
         Self {
             symbol_tables: Vec::new(),
             sizes,
-            l_count: 0,
+            // l_count: 0,
+            if_branch_count: 0,
+            else_branch_count: 0,
+            while_loop_count: 0,
             t_count: 0,
             out: String::new(),
         }
@@ -519,6 +525,9 @@ impl Generator {
                     self.analyze(*else_block, function_return_type);
                 }
             }
+            // parser::Statement::ElseStatement { body } => {
+            //     self.analyze(*body, function_return_type.clone());
+            // }
             parser::Statement::WhileStatement { condition, block } => {
                 let condition_type = self.get_type(*condition);
                 if !variant_eq(&condition_type, &parser::Type::Bool) {
@@ -531,12 +540,12 @@ impl Generator {
                 self.get_type(*expr);
             }
             parser::Statement::ParseError => panic!("error from parser"),
-            parser::Statement::Program(_) => panic!("derecated"),
+            // parser::Statement::Program(_) => panic!("derecated"),
             // TODO: almost want this to just be a compiler expansion / desugaring too
             parser::Statement::EnumDeclaration { name, varients, public } => unimplemented!(),
             parser::Statement::Member { name, t, public } => unimplemented!(),
             parser::Statement::StructDeclaration { name, members, public } => unimplemented!(),
-            parser::Statement::Parameter { name: _, t: _ } => unreachable!(),
+            // parser::Statement::Parameter { name: _, t: _ } => unreachable!(),
         }
     }
 
@@ -605,9 +614,7 @@ impl Generator {
                 body, 
                 public: _ 
             } => {
-                let label = std::format!("L{}:\n", self.l_count);
-                self.l_count += 1;
-                self.out.push_str(&label);
+                self.out.push_str(&(name + ":\n"));
                 self.tac_gen(*body); 
             }
             parser::Statement::Block(statements) => {
@@ -627,8 +634,49 @@ impl Generator {
                     let tmp = self.tac_expr(*s);
                     self.out.push_str(&std::format!("\t{} := {}\n", identifier, tmp));
                 } else {
-                    self.out.push_str(&identifier);
+                    self.out.push_str(&std::format!("\t{}\n", identifier));
                 }
+            }
+            parser::Statement::IfStatement { condition, block, alt } => {
+                let condition_expr = self.tac_expr(*condition);
+                let end_if_branch = std::format!("end_if_{}", self.if_branch_count);
+                self.if_branch_count += 1;
+
+                if let Some(else_branch) = alt {
+                    let else_label = std::format!("else_branch_{}", self.else_branch_count);
+                    self.else_branch_count += 1;
+
+                    self.out.push_str(&std::format!("\tifZ {} goto {}\n", condition_expr, else_label.clone())); 
+                    self.tac_gen(*block);
+                    self.out.push_str(&std::format!("\tgoto {}\n", end_if_branch.clone())); // merges branches
+
+                    self.out.push_str(&(else_label + ":\n"));
+                    self.tac_gen(*else_branch);
+
+                } else {
+                    self.out.push_str(&std::format!("\tifZ {} goto {}\n", condition_expr, end_if_branch.clone())); 
+                    self.tac_gen(*block);
+                }
+
+                self.out.push_str(&std::format!("{}:\n", end_if_branch));
+            }
+            parser::Statement::WhileStatement { condition, block } => {
+                let condition_expr = self.tac_expr(*condition);
+                let while_loop_start = std::format!("loop_start_{}", self.while_loop_count);
+                let while_loop_end = std::format!("loop_end_{}", self.while_loop_count);
+                self.while_loop_count += 1;
+
+                self.out.push_str(&(while_loop_start.clone() + ":\n"));
+                self.out.push_str(&std::format!("\tifZ {} goto {}\n", condition_expr, while_loop_end));
+                self.tac_gen(*block);
+                self.out.push_str(&std::format!("\tgoto {}\n", while_loop_start));
+                self.out.push_str(&(while_loop_end + ":\n"));
+            }
+            // parser::Statement::ElseStatement { body } => {
+            //     self.tac_gen(*body);
+            // }
+            parser::Statement::ExpressionStatement(expr) => {
+                self.tac_expr(*expr);
             }
             _ => {}
         }
