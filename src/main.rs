@@ -3,6 +3,7 @@ use std::fs;
 
 pub mod lexer;
 pub mod parser;
+pub mod analysis;
 pub mod ir;
 // pub mod tac;
 
@@ -25,10 +26,12 @@ fn main() {
         return;
     };
 
-    dbg!(&ast);
-    let mut codegen = ir::Generator::new();
-    let tac = codegen.generate(ast.clone());
+    // dbg!(&ast);
 
-    // let mut tac = tac::TAC::new();
-    // tac.codegen(ast);
+    let mut analyzer = analysis::Analyzer::new();
+    analyzer.analyze(ast.clone());
+
+    let mut codegen = ir::Generator::new();
+    let tac = codegen.generate(ast);
+    println!("{}", tac);
 }

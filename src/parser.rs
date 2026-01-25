@@ -108,11 +108,11 @@ pub enum Expression {
     },
 }
 
-#[derive(Debug, Clone)]
-pub struct Parameter {
-    pub name: String,
-    pub t: Type,
-}
+// #[derive(Debug, Clone)]
+// pub struct Parameter {
+//     pub name: String,
+//     pub t: Type,
+// }
 
 #[derive(Debug, Clone)]
 pub struct Member {
@@ -140,17 +140,17 @@ pub enum Statement {
         varients: Vec<String>,
         public: bool,
     },
-    // Parameter {
-    //     name: String,
-    //     t: Type,
-    // },
+    Parameter {
+        name: String,
+        t: Type,
+    },
     Return {
         value: Box<Expression>,
     },
     FunctionDeclaration {
         name: String,
         return_type: Type,
-        parameters: Vec<Parameter>,
+        parameters: Vec<Box<Statement>>,
         body: Box<Statement>,
         public: bool,
     },
@@ -499,7 +499,7 @@ impl Parser {
 
         self.expect(lexer::Token::LParen, "expected '(' after function name.");
 
-        let mut parameters: Vec<Parameter> = Vec::new();
+        let mut parameters: Vec<Box<Statement>> = Vec::new();
         while self.current() != lexer::Token::RParen {
             identifier = self.primary();
             let param_name = self.unwrap_identifier(
@@ -510,10 +510,10 @@ impl Parser {
             self.expect(lexer::Token::Colon, "expected colon after parameter name.");
 
             let param_type = self.parse_type();
-            parameters.push(Parameter {
+            parameters.push(Box::new(Statement::Parameter {
                 name: param_name,
                 t: param_type,
-            });
+            }));
 
             if self.current() == lexer::Token::Comma {
                 self.advance();
