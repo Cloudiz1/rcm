@@ -73,6 +73,10 @@ impl Type for Symbol {
 
 fn add_symbol(table: &mut HashMap<String, Symbol>, statement: parser::Statement) {
     let (name, symbol) = create_symbol_entry(statement);
+    if let Some(_) = table.get(&name) {
+        panic!("identifier {} already exists.", name);
+    }
+
     table.insert(name, symbol);
 }
 
@@ -141,8 +145,6 @@ fn create_symbol_entry(statement: parser::Statement) -> (String, Symbol) {
             // methods,
             public,
         } => {
-            // TODO: these two symbol tables need to be updated to check for ODR,
-            // should be much simpler cause they only require a check on their current scope
             let mut member_table: HashMap<String, Symbol> = HashMap::new();
             for member in members {
                 add_symbol(&mut member_table, *member);
@@ -345,6 +347,25 @@ impl Analyzer {
 
                 return self.allowed_implicit_conversion(lhs_type, rhs_type);
             }
+            parser::Expression::Dot {
+                lhs,
+                rhs
+            } => {
+                let parent = self.get_symbol(lhs);
+                match parent {
+                    Symbol::Struct { 
+                        members, 
+                        public 
+                    } => {
+                        let Some(child) = members.get(&rhs) else {
+                            panic!("member does not exist.");
+                        };
+
+                        child.get_type()
+                    }
+                    _ => panic!("unexpected symbol"),
+                }
+            }
             parser::Expression::Assignment { identifier, value } => {
                 let lhs_type = self.get_type(*identifier);
                 let rhs_type = self.get_type(*value);
@@ -352,6 +373,7 @@ impl Analyzer {
                 if lhs_type == rhs_type {
                     return lhs_type;
                 }
+
 
                 // TODO: type assignment should be stricter, assignment type should overwrite
                 
@@ -362,17 +384,37 @@ impl Analyzer {
             }
             parser::Expression::FunctionCall { identifier, args: _ } => self.get_type(*identifier),
             parser::Expression::ArrayAccess { identifier, index: _ } => self.get_type(*identifier),
-            // maybe even just implement this as parser desugaring? like:
-            // a = [1, 2, 3]; into
-            // a[0] = 1;
-            // a[1] = 2;
-            // a[2] = 3;
             parser::Expression::ArrayConstructor { values } => {
-                unimplemented!();
+                let expected_type = self.get_type(*values[0].clone());
+                for value in values {
+                    if !variant_eq(&expected_type, &self.get_type(*value)) {
+                        panic!("all expressions in array constructor must have the same type.");
+                    }
+                }
+
+                return expected_type;
+                // self.get_type(*values[0].clone());
             }
             // TODO: lookup
-            parser::Expression::StructMember { identifier, val } => {
-                unimplemented!();
+            parser::Expression::StructMember { 
+                parent,
+                identifier, 
+                val 
+            } => {
+                let parent_struct = self.get_symbol(parent);
+                match parent_struct {
+                    Symbol::Struct { 
+                        members, 
+                        public 
+                    } => {
+                        let Some(child) = members.get(&identifier) else {
+                            panic!();
+                        };
+
+                        return child.get_type()
+                    }
+                    _ => panic!(),
+                }
             }
             parser::Expression::StructConstructor { identifier, members } => {
                 todo!();
@@ -476,7 +518,7 @@ impl Analyzer {
             // TODO: almost want this to just be a compiler expansion / desugaring too
             parser::Statement::EnumDeclaration { name, varients, public } => unimplemented!(),
             parser::Statement::Member { name, t, public } => unimplemented!(),
-            parser::Statement::StructDeclaration { name, members, public } => unimplemented!(),
+            parser::Statement::StructDeclaration { name, members, public } => {},
             // parser::Statement::Parameter { name: _, t: _ } => unreachable!(),
         }
     }
@@ -497,5 +539,6 @@ impl Analyzer {
     pub fn analyze(&mut self, ast: Vec<parser::Statement>) {
         self.get_globals(ast.clone()); 
         self.semantic_analysis(ast);
+        dbg!(&self.sizes);
     }
 }

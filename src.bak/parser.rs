@@ -83,6 +83,10 @@ pub enum Expression {
         operator: Operator,
         rhs: Box<Expression>,
     },
+    Dot {
+        lhs: String,
+        rhs: String,
+    },
     Assignment {
         identifier: Box<Expression>,
         value: Box<Expression>,
@@ -99,6 +103,7 @@ pub enum Expression {
         values: Vec<Box<Expression>>,
     },
     StructMember {
+        parent: String,
         identifier: String,
         val: Box<Expression>,
     },
@@ -114,12 +119,12 @@ pub enum Expression {
 //     pub t: Type,
 // }
 
-#[derive(Debug, Clone)]
-pub struct Member {
-    pub name: String,
-    pub t: Type,
-    pub public: bool,
-}
+// #[derive(Debug, Clone)]
+// pub struct Member {
+//     pub name: String,
+//     pub t: Type,
+//     pub public: bool,
+// }
 
 #[derive(Debug, Clone)]
 pub enum Statement {
@@ -184,6 +189,7 @@ pub struct Parser {
     i: usize,
     types: HashMap<String, Type>,
     panic: bool,
+    out: Vec<Statement>,
 }
 
 // helpers
@@ -231,6 +237,7 @@ impl Parser {
             i: 0,
             types,
             panic: false,
+            out: Vec::new(),
         }
     }
 
@@ -441,6 +448,7 @@ impl Parser {
                     self.advance();
                     return;
                 }
+
                 lexer::Token::Pub
                 | lexer::Token::Fn
                 | lexer::Token::Struct
@@ -464,19 +472,20 @@ impl Parser {
 // statements
 impl Parser {
     // i know the vec is silly but its for struct method desugaring
-    fn declaration(&mut self) -> Vec<Statement> {
+    fn declaration(&mut self) -> Statement {
         if self.current() == lexer::Token::Pub {
             self.advance();
         }
 
         let out = match self.current() {
-            lexer::Token::Fn => vec![self.function_declaration(None)],
+            lexer::Token::Fn => self.function_declaration(None),
             lexer::Token::Struct => self.struct_declaration(),
-            lexer::Token::Enum => vec![self.enum_declaration()],
-            lexer::Token::Let | lexer::Token::Const => vec![self.variable_declaration(true)],
+            lexer::Token::Enum => self.enum_declaration(),
+            lexer::Token::Let | lexer::Token::Const => self.variable_declaration(true),
             _ => {
                 self.error("unrecognized top level expression");
-                vec![Statement::ParseError]
+                Statement::ParseError
+                // vec![Statement::ParseError]
             }
         };
 
@@ -547,7 +556,7 @@ impl Parser {
     }
 
     // Currently allows zero-sized structs, not sure if i want this or not
-    fn struct_declaration(&mut self) -> Vec<Statement> {
+    fn struct_declaration(&mut self) -> Statement {
         let struct_public = self.is_public();
         self.advance(); // consume struct token
 
@@ -555,7 +564,8 @@ impl Parser {
         let struct_name = self.unwrap_identifier(identifier, "expected struct name after struct keyword.");
 
         if !self.expect(lexer::Token::LCurly, "expected body of struct.") {
-            return vec![Statement::ParseError];
+            return Statement::ParseError;
+            // return vec![Statement::ParseError];
         }
 
         let mut members: Vec<Box<Statement>> = Vec::new();
@@ -597,7 +607,7 @@ impl Parser {
             };
         }
 
-        let mut methods: Vec<Statement> = Vec::new();
+        // let mut methods: Vec<Statement> = Vec::new();
         loop {
             if self.current() == lexer::Token::Pub {
                 self.advance();
@@ -605,7 +615,8 @@ impl Parser {
             }
 
             if self.current() == lexer::Token::Fn {
-                methods.push(self.function_declaration(Some(struct_name.clone())));
+                let method = self.function_declaration(Some(struct_name.clone()));
+                self.out.push(method);
             } else {
                 break;
             }
@@ -620,14 +631,12 @@ impl Parser {
 
         self.expect(lexer::Token::RCurly, "expected closing curly on struct declaration.");
 
-        methods.push(Statement::StructDeclaration {
+        return Statement::StructDeclaration {
             name: struct_name,
             members,
             // methods,
             public: struct_public,
-        });
-
-        return methods;
+        };
     }
 
     fn enum_declaration(&mut self) -> Statement {
@@ -868,17 +877,19 @@ impl Parser {
         self.input = input;
 
         // let mut program: Vec<Box<Statement>> = Vec::new();
-        let mut program: Vec<Statement> = Vec::new();
+        // let mut program: Vec<Statement> = Vec::new();
         while !self.at_end() && self.current() != lexer::Token::EOF {
-            for statement in self.declaration() {
-                // program.push(Box::new(statement));
-                program.push(statement);
-            }
+            let statement = self.declaration();
+            self.out.push(statement);
+            // for statement in self.declaration() {
+            //     program.push(statement);
+            // }
         }
 
         // Some(Statement::Program(program))
         // Some(program)
-        Some(program)
+        // Some(program)
+        Some(self.out.clone())
     }
 
     fn expression(&mut self) -> Expression {
@@ -1133,6 +1144,7 @@ impl Parser {
                         }
 
                         members.push(Box::new(Expression::StructMember {
+                            parent: identifier.clone(),
                             identifier: member_name,
                             val,
                         }));
@@ -1180,8 +1192,25 @@ impl Parser {
                     //     },
                     //     _ => {}
                     // }
+                    
+                    // match expr.clone() {
+                    //     Expression::Identifier(lhs_val) => {
+                    //         match rhs {
+                    //             Expression::Identifier(rhs_val) => {
+                    //                 return Expression::Identifier(std::format!("{}@{}", lhs_val, rhs_val));
+                    //             }
+                    //         _ => {}
+                    //         }
+                    //     } 
+                    //     _ => {}
+                    // };
 
-                    self.create_binary(expr, Operator::Dot, rhs)
+                    let parent = self.unwrap_identifier(expr, "dot operator only works with identifiers.");
+                    let child = self.unwrap_identifier(rhs, "dot operator only works with identifiers.");
+                    Expression::Dot {
+                        lhs: parent,
+                        rhs: child,
+                    }
                 }
                 lexer::Token::LParen => {
                     self.advance(); // consume LParen
@@ -1206,11 +1235,15 @@ impl Parser {
                     // Desugaring!
                     // foo.bar() -> foo.bar(&foo)
                     match expr.clone() {
-                        Expression::Binary { lhs, operator: _, rhs: _ } => {
+                        Expression::Binary { lhs, operator, rhs } => {
                             args.insert(0, Box::new(Expression::Unary { 
                                 operator: Operator::Reference, 
                                 member: lhs.clone(),
-                            }))
+                            }));
+
+                            // TODO: foo.bar(&foo) -> foo@bar(&foo)
+                            if operator == Operator::Dot {
+                            }
                         }
                         _ => {}
                     };

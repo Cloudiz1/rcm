@@ -1,8 +1,13 @@
-fn foo(a: i32, b: i32) i32 {
-	return a + b;
-}
-
 pub fn main() void {
-	let c = foo(1, 2);
+	let a = "abc;
+	let b = abc";
+	let c = 1 + 2 * 3;
+	@;
+
+
+
+
+	let a = @;
+	@
 }
 

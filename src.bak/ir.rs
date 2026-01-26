@@ -118,9 +118,14 @@ impl Generator {
                 index,
             } => unimplemented!(), 
             // TODO: again, may remove the idea of this entirely and do it through desugaring  
-            parser::Expression::ArrayConstructor { values } => unimplemented!(),
-            parser::Expression::StructMember { identifier, val } => unimplemented!(),
+            parser::Expression::ArrayConstructor { values } => {
+                unreachable!()
+            },
+            parser::Expression::StructMember { parent: _, identifier, val } => unimplemented!(),
             parser::Expression::StructConstructor { identifier, members } => unimplemented!(),
+            parser::Expression::Dot { lhs, rhs } => {
+                todo!();   
+            }
         }
     }
 
@@ -154,8 +159,19 @@ impl Generator {
                 global 
             } => {
                 if let Some(s) = initial_value {
-                    let tmp = self.tac_expr(*s);
-                    self.out.push_str(&std::format!("\t{} := {}\n", identifier, tmp));
+                    match *s.clone() {
+                        parser::Expression::ArrayConstructor { values } => {
+                            self.out.push_str(&std::format!("\t{}\n", identifier.clone()));
+                            for (i, value) in values.iter().enumerate() {
+                                let tmp = self.tac_expr(*value.clone()); 
+                                self.out.push_str(&std::format!("\t{}[{}] := {}\n", identifier, i, tmp));
+                            }
+                        }
+                        _ => {
+                            let tmp = self.tac_expr(*s);
+                            self.out.push_str(&std::format!("\t{} := {}\n", identifier, tmp));
+                        } 
+                    }
                 } else {
                     self.out.push_str(&std::format!("\t{}\n", identifier));
                 }

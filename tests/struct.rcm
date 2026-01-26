@@ -1,8 +1,8 @@
 struct foo {
 	bar: i32,
-	baz: string,
+	baz: i32,
 
-	pub fn a(self: *foo) {
+	pub fn add(self: *foo) i32 {
 		return 1 + 2 * 3;
 	}
 }
@@ -10,9 +10,8 @@ struct foo {
 pub fn main() void {
 	foo {
 		bar: 1 + 2 * 3,
-		baz: "Hello, world!",
+		baz: 35,
 	};
 
 	foo.a();
-	// bar.foo.baz.a();
 }

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::vec::Vec;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Token {
@@ -89,193 +88,264 @@ pub enum Token {
     Newline,
     Tab,
 
-    Unknown(char),
     EOF,
 }
 
 #[derive(Clone, Debug)]
 pub struct DebugToken {
     pub token_type: Token,
-    pub line: u32,
+    pub line_number: usize,
+    pub column: usize,
+    pub line: String, 
 }
 
 pub struct Tokenizer {
-    input: String,
+    input: Vec<char>,
     i: usize,
-    line: u32,
     keywords: HashMap<String, Token>,
+    
+    // error reporting 
+    src_path: String,
+    line_number: usize,
+    column: usize,
+    lines: Vec<String>,
+    panic: bool,
+    errored: bool,
 }
 
 impl Tokenizer {
     pub fn new() -> Self {
         let mut tokenizer = Tokenizer {
+            input: Vec::new(),
             i: 0,
-            line: 1,
-            input: String::new(),
             keywords: HashMap::new(),
+
+            // error reporting
+            src_path: String::new(),
+            line_number: 0,
+            column: 0,
+            lines: Vec::new(),
+            panic: false,
+            errored: false,
         };
 
         tokenizer.keywords.insert(String::from("let"), Token::Let);
-        tokenizer
-            .keywords
-            .insert(String::from("const"), Token::Const);
+        tokenizer.keywords.insert(String::from("const"), Token::Const);
         tokenizer.keywords.insert(String::from("pub"), Token::Pub);
         tokenizer.keywords.insert(String::from("fn"), Token::Fn);
         tokenizer.keywords.insert(String::from("enum"), Token::Enum);
-        tokenizer
-            .keywords
-            .insert(String::from("struct"), Token::Struct);
+        tokenizer.keywords.insert(String::from("struct"), Token::Struct);
         tokenizer.keywords.insert(String::from("if"), Token::If);
         tokenizer.keywords.insert(String::from("else"), Token::Else);
-        tokenizer
-            .keywords
-            .insert(String::from("switch"), Token::Switch);
+        tokenizer.keywords.insert(String::from("switch"), Token::Switch);
         tokenizer.keywords.insert(String::from("case"), Token::Case);
-        tokenizer
-            .keywords
-            .insert(String::from("while"), Token::While);
+        tokenizer.keywords.insert(String::from("while"), Token::While);
         tokenizer.keywords.insert(String::from("do"), Token::Do);
         tokenizer.keywords.insert(String::from("for"), Token::For);
-        tokenizer
-            .keywords
-            .insert(String::from("break"), Token::Break);
-        tokenizer
-            .keywords
-            .insert(String::from("continue"), Token::Continue);
-        tokenizer
-            .keywords
-            .insert(String::from("return"), Token::Return);
-        tokenizer
-            .keywords
-            .insert(String::from("true"), Token::Bool(true));
-        tokenizer
-            .keywords
-            .insert(String::from("false"), Token::Bool(false));
+        tokenizer.keywords.insert(String::from("break"), Token::Break);
+        tokenizer.keywords.insert(String::from("continue"), Token::Continue);
+        tokenizer.keywords.insert(String::from("return"), Token::Return);
+        tokenizer.keywords.insert(String::from("true"), Token::Bool(true));
+        tokenizer.keywords.insert(String::from("false"), Token::Bool(false));
         tokenizer.keywords.insert(String::from("null"), Token::Null);
 
-        tokenizer
+        return tokenizer;
     }
 
-    fn peek(&self) -> Option<char> {
-        if self.i >= self.input.len() - 1 {
+    fn error(&mut self, msg: &str) {
+        if !self.panic {
+            println!("at {}:{}:{}:", self.src_path, self.line_number + 1, self.column);
+            println!("{} | {}", self.line_number + 1, self.lines[self.line_number]);
+            for _ in 0..self.column {
+                print!(" ");
+            }
+
+            let line_len = (self.line_number + 1).to_string().len();
+            for _ in 0..=line_len {
+                print!(" ");
+            }
+    
+            println!("^ {}", msg);
+            println!("");
+        }
+
+        self.panic = true;
+        self.errored = true;
+    }
+
+    fn sync(&mut self) {
+        while let Some(c) = self.current() {
+            if c == ';' {
+                self.panic = false;
+                return;
+            }
+
+            self.advance();
+        }
+    }
+
+    fn peek(&mut self) -> Option<char> {
+        let index = self.i + 1;
+        if index >= self.input.len() {
+            self.error("expected token");
             return None;
         }
 
-        Some(self.input.chars().nth(self.i + 1).unwrap())
+        return Some(self.input[index]);
+    }
+
+    fn current(&self) -> Option<char> {
+        if self.i >= self.input.len() {
+            return None;
+        }
+
+        return Some(self.input[self.i]);
     }
 
     fn advance(&mut self) {
         self.i += 1;
+        self.column += 1;
     }
 
-    fn is_next_equal(&mut self, t1: Token, t2: Token) -> Token {
-        if self.peek().unwrap() == '=' {
-            self.advance();
-            return t2;
+    fn operation_and_assignment(&mut self, a: Token, b: Token) -> Token {
+        if let Some(c) = self.peek() {
+            if c == '=' {
+                return b;
+            } 
         }
 
-        t1
+        return a;
     }
 
     fn is_double(&mut self, c: char) -> bool {
         if let Some(n) = self.peek() {
-            if n == c {
-                return true;
-            }
+            return n == c;
         }
 
         return false;
     }
 
-    fn get_escaped_char(&self) -> Option<char> {
-        // TODO: maybe erroring in here is better? would require less logic to figure out if its an
-        // invalid escape or unrecognized escape
-        let Some(n) = self.peek() else {
-            return None;
+    fn skip_whitespace(&mut self) {
+        while let Some(c) = self.current() {
+            if c == '\n' {
+                self.line_number += 1;
+                self.column = 0;
+            }
+
+            if !c.is_whitespace() {
+                return;
+            }
+
+            self.advance();
+        }
+    }
+
+    fn skip_comment(&mut self) {
+        let Some(c) = self.current() else {
+            return;
         };
 
-        Some(match n {
-            'n' => '\n',
-            'r' => '\r',
-            't' => '\t',
-            '\'' => '\'',
-            '\"' => '\"',
-            _ => return None,
-        })
+        let Some(n) = self.peek() else {
+            return;
+        };
+
+        if c != '/' || n != '/' {
+            return
+        }
+
+        while let Some(c) = self.current() {
+            self.advance();
+            if c == '\n' {
+                return;
+            }
+        }
+    }
+
+    fn get_escaped_char(&mut self) -> char {
+        if let Some(c) = self.current() {
+            match c {
+                'n' => return '\n',
+                't' => return '\t',
+                'r' => return '\r',
+                '\\' => return '\\',
+                _ => {}
+            }
+        }
+
+        self.error("unrecognized escape sequence");
+        return '\0';
     }
 
     fn read_character(&mut self) -> Option<Token> {
         let Some(n) = self.peek() else {
-            // TODO: Error, trailing single quote
+            self.error("expected token after single quote");
             return None;
         };
-
+        
         if n == '\'' {
-            // TODO: Error, Empty character literal
+            self.error("empty character literal");
             return None;
         }
 
         let mut out: Token = Token::Char(n);
         if n == '\\' {
             self.advance();
-            if let Some(esc_char) = self.get_escaped_char() {
-                out = Token::Char(esc_char);
-            } else {
-                // TODO: Error, improperly escaped character
-                // might be able to leave this erroring to `self.get_escaped_char()`?
-            }
+            out = Token::Char(self.get_escaped_char()); // this handles error
         }
 
-        self.advance(); // consume read character
+        self.advance(); // consumes read character
         let Some(n) = self.peek() else {
-            // TODO: Error, no closing single quote
+            self.error("expected token");
             return None;
         };
 
         if n != '\'' {
-            // TODO: Error, no closing single quote
-            // you can actually make this more specific as in a) too many
-            // characeters in a char or b) no single closing single quote
+            self.error("expected closing single quote");
             return None;
         }
 
-        self.advance(); // consume single quote
+        self.advance();
         return Some(out);
     }
 
     fn read_string(&mut self) -> Option<Token> {
-        let mut out: String = String::new();
+        let mut out = String::new();
         while let Some(n) = self.peek() {
-            if n == '\"' {
+            if n == '\"' || n == '\n' {
                 break;
             }
 
+            let mut c = n;
             if n == '\\' {
                 self.advance();
-                if let Some(esc_char) = self.get_escaped_char() {
-                    out.push(esc_char);
-                } else {
-                    // TODO: invalid escaped char
-                    return None;
-                }
-            } else {
-                out.push(n);
-            }
+                c = self.get_escaped_char();
+                self.advance();
+            } 
 
-            self.advance();
+            out.push(c);
+            self.advance()
+        };
+
+        let Some(n) = self.peek() else {
+            self.error("expected token");
+            return None;
+        };
+
+        if n != '\"' {
+            self.error("expected closing quote");
+            return None;
         }
 
-        // TODO: Error, no closing delimeter
         self.advance();
-        Some(Token::StringLit(out))
+        return Some(Token::StringLit(out));
     }
 
-    fn read_identifiers_and_keywords(&mut self, curr: char) -> Option<Token> {
+    fn read_word(&mut self, curr: char) -> Option<Token> {
         let mut out: String = String::from(curr);
         while let Some(n) = self.peek() {
             if !n.is_ascii_alphanumeric() && n != '_' {
                 break;
-            }
+            };
 
             out.push(n);
             self.advance();
@@ -285,7 +355,7 @@ impl Tokenizer {
             return Some(keyword.clone());
         }
 
-        Some(Token::Identifier(out))
+        return Some(Token::Identifier(out));
     }
 
     fn read_number(&mut self, curr: char) -> Option<Token> {
@@ -309,16 +379,13 @@ impl Tokenizer {
         }
     }
 
-    fn get_token(&mut self, c: char) -> Option<Token> {
-        // I dont think this should error, all of its helper functions should instead
+    fn get_token(&mut self) -> Option<Token> {
+        self.skip_whitespace();
+        self.skip_comment();
 
-        if c == '\n' {
-            self.line += 1;
-        }
-
-        if c.is_whitespace() {
+        let Some(c) = self.current() else {
             return None;
-        }
+        };
 
         Some(match c {
             '(' => Token::LParen,
@@ -333,44 +400,28 @@ impl Tokenizer {
                         self.advance();
                         return Some(Token::DotStar);
                     }
-                }
-
+                } 
                 return Some(Token::Dot);
             }
             ',' => Token::Comma,
             ';' => Token::Semicolon,
             ':' => Token::Colon,
-            '=' => self.is_next_equal(Token::Equal, Token::EqualEqual),
-            '+' => self.is_next_equal(Token::Plus, Token::PlusEqual),
-            '-' => self.is_next_equal(Token::Minus, Token::MinusEqual),
-            '*' => self.is_next_equal(Token::Star, Token::StarEqual),
-            '/' => {
-                if let Some(next_c) = self.peek() {
-                    if next_c == '/' {
-                        self.advance();
-                        while let Some(n) = self.peek() {
-                            self.advance();
-                            if n == '\n' {
-                                self.line += 1;
-                                return None;
-                            }
-                        }
-                    }
-                }
-
-                return Some(self.is_next_equal(Token::Slash, Token::SlashEqual));
-            }
-            '%' => self.is_next_equal(Token::Percent, Token::PercentEqual),
-            '!' => self.is_next_equal(Token::Bang, Token::BangEqual),
+            '=' => self.operation_and_assignment(Token::Equal, Token::EqualEqual),
+            '+' => self.operation_and_assignment(Token::Plus, Token::PlusEqual),
+            '-' => self.operation_and_assignment(Token::Minus, Token::MinusEqual),
+            '*' => self.operation_and_assignment(Token::Star, Token::StarEqual),
+            '/' => self.operation_and_assignment(Token::Slash, Token::SlashEqual),
+            '%' => self.operation_and_assignment(Token::Percent, Token::PercentEqual),
+            '!' => self.operation_and_assignment(Token::Bang, Token::BangEqual),
             '~' => Token::Tilde,
             '_' => Token::Underscore,
-            '^' => self.is_next_equal(Token::Caret, Token::CaretEqual),
+            '^' => self.operation_and_assignment(Token::Caret, Token::CaretEqual),
             '|' => {
                 if self.is_double(c) {
                     self.advance();
                     return Some(Token::DoublePipe);
                 } else {
-                    return Some(self.is_next_equal(Token::Pipe, Token::PipeEqual));
+                    return Some(self.operation_and_assignment(Token::Pipe, Token::PipeEqual));
                 }
             }
             '&' => {
@@ -378,80 +429,73 @@ impl Tokenizer {
                     self.advance();
                     return Some(Token::DoubleAmpersand);
                 } else {
-                    return Some(self.is_next_equal(Token::Ampersand, Token::AmpersandEqual));
+                    return Some(self.operation_and_assignment(Token::Ampersand, Token::AmpersandEqual));
                 }
             }
             '>' => {
                 if self.is_double(c) {
                     self.advance();
-
-                    if let Some(n) = self.peek() {
-                        if n == '=' {
-                            self.advance();
-                            return Some(Token::DoubleRightCaretEqual);
-                        }
-                    }
-
-                    return Some(Token::DoubleRightCaret);
+                    return Some(self.operation_and_assignment(Token::DoubleRightCaret, Token::DoubleRightCaretEqual));
                 } else {
-                    return Some(self.is_next_equal(Token::RightCaret, Token::RightCaretEqual));
+                    return Some(self.operation_and_assignment(Token::RightCaret, Token::RightCaretEqual));
                 }
             }
             '<' => {
                 if self.is_double(c) {
                     self.advance();
-
-                    if let Some(n) = self.peek() {
-                        if n == '=' {
-                            self.advance();
-                            return Some(Token::DoubleLeftCaretEqual);
-                        }
-                    }
-
-                    return Some(Token::DoubleLeftCaret);
+                    return Some(self.operation_and_assignment(Token::DoubleLeftCaret, Token::DoubleLeftCaretEqual));
                 } else {
-                    return Some(self.is_next_equal(Token::LeftCaret, Token::LeftCaretEqual));
+                    return Some(self.operation_and_assignment(Token::LeftCaret, Token::LeftCaretEqual));
                 }
             }
             '\'' => return self.read_character(),
             '\"' => return self.read_string(),
-            'a'..='z' | 'A'..='Z' => return self.read_identifiers_and_keywords(c),
+            'a'..='z' | 'A'..='Z' => return self.read_word(c),
             '0'..='9' => return self.read_number(c),
-            _ => Token::Unknown(c),
+            _ => {
+                self.error("unrecognized token");
+                return None;
+            }
         })
     }
 
-    pub fn tokenize(&mut self, input: String) -> Vec<DebugToken> {
+    pub fn tokenize(&mut self, input: String, src_path: String) -> Option<Vec<DebugToken>> {
         let mut out: Vec<DebugToken> = Vec::new();
-        self.input = input;
+        self.lines = input.split("\n").map(|x| x.trim().to_owned()).collect();
+        self.input = input.chars().collect::<Vec<char>>();
+        self.src_path = src_path;
         while self.i < self.input.len() {
-            if let Some(t) = self.get_token(self.input.chars().nth(self.i).unwrap()) {
-                let debug_token = DebugToken {
-                    line: self.line,
-                    token_type: t,
-                };
-
-                out.push(debug_token);
+            if let Some(token_type) = self.get_token() {
+                let line_number = self.line_number;
+                out.push( DebugToken {
+                    token_type,
+                    line_number,
+                    column: self.column,
+                    line: self.lines[line_number].clone(),
+                });
             }
+
+            if self.panic {
+                self.sync();
+            }
+
             self.advance();
         }
 
-        let eof = DebugToken {
-            token_type: Token::EOF,
-            line: self.line,
-        };
+        if self.errored {
+            return None;
+        }
 
-        out.push(eof);
-        out
+        return Some(out);
     }
 }
 
 pub fn print_tokens(tokens: Vec<DebugToken>) {
     let mut line = 0;
     for token in tokens {
-        if token.line != line {
+        if token.line_number != line {
             println!("");
-            line = token.line;
+            line = token.line_number;
             print!("{} | ", line);
         }
 
@@ -461,109 +505,3 @@ pub fn print_tokens(tokens: Vec<DebugToken>) {
     println!("");
     println!("");
 }
-
-// TODO: i can 100% reuse these tests if i just write a helper that ignores the line numbers for me
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//
-//     #[test]
-//     fn basic_symbols() {
-//         let tokens = Tokenizer::new().tokenize("()[]{},.;:".to_owned());
-//         let expected_tokens = Vec::from(&[
-//             Token::LParen,
-//             Token::RParen,
-//             Token::LBrace,
-//             Token::RBrace,
-//             Token::LCurly,
-//             Token::RCurly,
-//             Token::Comma,
-//             Token::Dot,
-//             Token::Semicolon,
-//             Token::Colon,
-//             Token::EOF,
-//         ]);
-//
-//         assert_eq!(tokens, expected_tokens);
-//     }
-//
-//     #[test]
-//     fn operations() {
-//         let tokens = Tokenizer::new().tokenize("+ += - -= * *= / /= % %=".to_owned());
-//         let expected_tokens = Vec::from(&[
-//             Token::Plus,
-//             Token::PlusEqual,
-//             Token::Minus,
-//             Token::MinusEqual,
-//             Token::Star,
-//             Token::StarEqual,
-//             Token::Slash,
-//             Token::SlashEqual,
-//             Token::Percent,
-//             Token::PercentEqual,
-//             Token::EOF,
-//         ]);
-//
-//         assert_eq!(tokens, expected_tokens);
-//     }
-//
-//     #[test]
-//     fn bitwise() {
-//         let tokens = Tokenizer::new().tokenize("& &= | |= ^ ^= << <<= >> >>=".to_owned());
-//         let expected_tokens = Vec::from(&[
-//             Token::Ampersand,
-//             Token::AmpersandEqual,
-//             Token::Pipe,
-//             Token::PipeEqual,
-//             Token::Caret,
-//             Token::CaretEqual,
-//             Token::DoubleLeftCaret,
-//             Token::DoubleLeftCaretEqual,
-//             Token::DoubleRightCaret,
-//             Token::DoubleRightCaretEqual,
-//             Token::EOF,
-//         ]);
-//
-//         assert_eq!(tokens, expected_tokens);
-//     }
-//
-//     #[test]
-//     fn logical() {
-//         let tokens = Tokenizer::new().tokenize("|| &&".to_owned());
-//         let expected_tokens = Vec::from(&[Token::DoublePipe, Token::DoubleAmpersand, Token::EOF]);
-//         assert_eq!(tokens, expected_tokens);
-//     }
-//
-//     #[test]
-//     fn literals() {
-//         let tokens = Tokenizer::new().tokenize("\"Hello, world!\" 42 67.41".to_owned());
-//         let expected_tokens = Vec::from(&[
-//             Token::StringLit("Hello, world!".to_owned()),
-//             Token::IntLit(42),
-//             Token::FloatLit(67.41),
-//             Token::EOF,
-//         ]);
-//         assert_eq!(tokens, expected_tokens);
-//     }
-//
-//     #[test]
-//     fn variable_declaration() {
-//         let tokens = Tokenizer::new().tokenize("let foo: i32 = 1 + 2 * 3;".to_owned());
-//         let expected_tokens = Vec::from(&[
-//             Token::Let,
-//             Token::Identifier("foo".to_owned()),
-//             Token::Colon,
-//             Token::Identifier("i32".to_owned()),
-//             Token::Equal,
-//             Token::IntLit(1),
-//             Token::Plus,
-//             Token::IntLit(2),
-//             Token::Star,
-//             Token::IntLit(3),
-//             Token::Semicolon,
-//             Token::EOF,
-//         ]);
-//         assert_eq!(tokens, expected_tokens);
-//     }
-// }
