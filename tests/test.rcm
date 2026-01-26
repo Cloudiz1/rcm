@@ -1,13 +1,6 @@
 pub fn main() void {
-	let a = "abc;
-	let b = abc";
+	let a = "abc";
+	let b = "abc";
 	let c = 1 + 2 * 3;
-	@;
-
-
-
-
-	let a = @;
-	@
 }
 

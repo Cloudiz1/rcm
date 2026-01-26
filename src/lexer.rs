@@ -96,7 +96,7 @@ pub struct DebugToken {
     pub token_type: Token,
     pub line_number: usize,
     pub column: usize,
-    pub line: String, 
+    // pub line: String, 
 }
 
 pub struct Tokenizer {
@@ -471,7 +471,7 @@ impl Tokenizer {
                     token_type,
                     line_number,
                     column: self.column,
-                    line: self.lines[line_number].clone(),
+                    // line: self.lines[line_number].clone(),
                 });
             }
 
@@ -491,12 +491,12 @@ impl Tokenizer {
 }
 
 pub fn print_tokens(tokens: Vec<DebugToken>) {
-    let mut line = 0;
+    let mut line = 1;
     for token in tokens {
         if token.line_number != line {
             println!("");
             line = token.line_number;
-            print!("{} | ", line);
+            print!("{} | ", line + 1);
         }
 
         print!(" {:?}", token.token_type);
