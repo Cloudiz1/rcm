@@ -65,3 +65,6 @@ Expressions:
 	- if lhs.get_type() is ptr type:
 	- add a deref beforehand! (might be able to do this using the same recursive function?)
 	- basically: `struct.method(*Struct)` -> `*struct.method(*Struct)`
+
+### misc
+- abstract out error printing logic asp

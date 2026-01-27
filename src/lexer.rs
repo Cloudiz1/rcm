@@ -1,3 +1,4 @@
+use crate::util;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -95,7 +96,7 @@ pub enum Token {
 pub struct DebugToken {
     pub token_type: Token,
     pub line_number: usize,
-    pub column: usize,
+    pub column: i64,
     // pub line: String, 
 }
 
@@ -107,24 +108,26 @@ pub struct Tokenizer {
     // error reporting 
     src_path: String,
     line_number: usize,
-    column: usize,
+    column: i64,
     lines: Vec<String>,
     panic: bool,
     errored: bool,
 }
 
 impl Tokenizer {
-    pub fn new() -> Self {
+    pub fn new(lines: Vec<String>, src_path: String) -> Self {
+        let input: Vec<char> = lines.join("\n").chars().collect();
+        let src_path = src_path;
         let mut tokenizer = Tokenizer {
-            input: Vec::new(),
+            input,
             i: 0,
             keywords: HashMap::new(),
 
             // error reporting
-            src_path: String::new(),
+            src_path,
             line_number: 0,
             column: 0,
-            lines: Vec::new(),
+            lines,
             panic: false,
             errored: false,
         };
@@ -154,19 +157,13 @@ impl Tokenizer {
 
     fn error(&mut self, msg: &str) {
         if !self.panic {
-            println!("at {}:{}:{}:", self.src_path, self.line_number + 1, self.column);
-            println!("{} | {}", self.line_number + 1, self.lines[self.line_number]);
-            for _ in 0..self.column {
-                print!(" ");
-            }
+            let debug_token = DebugToken {
+                token_type: Token::Null,
+                line_number: self.line_number.clone(),
+                column: self.column.clone(),
+            };
 
-            let line_len = (self.line_number + 1).to_string().len();
-            for _ in 0..=line_len {
-                print!(" ");
-            }
-    
-            println!("^ {}", msg);
-            println!("");
+            util::print_error(debug_token, &self.lines.clone(), &self.src_path.clone(), msg);
         }
 
         self.panic = true;
@@ -187,7 +184,6 @@ impl Tokenizer {
     fn peek(&mut self) -> Option<char> {
         let index = self.i + 1;
         if index >= self.input.len() {
-            self.error("expected token");
             return None;
         }
 
@@ -210,6 +206,7 @@ impl Tokenizer {
     fn operation_and_assignment(&mut self, a: Token, b: Token) -> Token {
         if let Some(c) = self.peek() {
             if c == '=' {
+                self.advance();
                 return b;
             } 
         }
@@ -229,7 +226,8 @@ impl Tokenizer {
         while let Some(c) = self.current() {
             if c == '\n' {
                 self.line_number += 1;
-                self.column = 0;
+                self.column = -1; // when you advance, youll actually be on the first token, and
+                                  // its supposed to be zero indexed
             }
 
             if !c.is_whitespace() {
@@ -237,6 +235,7 @@ impl Tokenizer {
             }
 
             self.advance();
+            // self.column -= 1; // dont count whitespace!
         }
     }
 
@@ -459,11 +458,8 @@ impl Tokenizer {
         })
     }
 
-    pub fn tokenize(&mut self, input: String, src_path: String) -> Option<Vec<DebugToken>> {
+    pub fn tokenize(&mut self) -> Option<Vec<DebugToken>> {
         let mut out: Vec<DebugToken> = Vec::new();
-        self.lines = input.split("\n").map(|x| x.trim().to_owned()).collect();
-        self.input = input.chars().collect::<Vec<char>>();
-        self.src_path = src_path;
         while self.i < self.input.len() {
             if let Some(token_type) = self.get_token() {
                 let line_number = self.line_number;
