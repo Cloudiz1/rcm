@@ -3,7 +3,39 @@ use crate::util;
 use std::collections::HashMap;
 use std::vec::Vec;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
+pub enum Operator {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Modulus,
+
+    BitwiseNot,
+    BitwiseOr,
+    BitwiseAnd,
+    BitwiseXOr,
+    BitwiseLeftShift,
+    BitwiseRightShift,
+
+    Negate,
+
+    LogicalNot,
+    LogicalOr,
+    LogicalAnd,
+    Equal,
+    NotEqual,
+    LessThan,
+    GreaterThan,
+    LessThanEqual,
+    GreaterThanEqual,
+
+    Reference,
+    Dereference,
+    Dot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     Pointer(Box<Type>),
     Array {
@@ -11,10 +43,6 @@ pub enum Type {
         size: Option<usize>, // this will always be known when passed to TAC
     },
     Typedef(String),
-    // Struct {
-    //     members: HashMap<String, Type>,
-    //     methods: HashMap<String, Type>,
-    // },
     I8,
     U8,
     I16,
@@ -32,16 +60,6 @@ pub enum Type {
     Char,
 }
 
-pub struct Parser {
-    input: Vec<lexer::DebugToken>,
-    i: usize,
-    types: HashMap<String, Type>,
-    panic: bool,
-    // out: Vec<Statement>,
-    lines: Vec<String>,
-    src_path: String,
-}
-
 #[derive(Debug, Clone)]
 pub enum Expression {
     // expressions
@@ -53,24 +71,24 @@ pub enum Expression {
     Char(char),
     Bool(bool),
     Unary {
-        operator: lexer::Token,
+        operator: Operator,
         member: Box<Expression>,
     },
     Binary {
         lhs: Box<Expression>,
-        operator: lexer::Token,
+        operator: Operator,
         rhs: Box<Expression>,
     },
     Dot {
-        lhs: Box<Expression>, // these have to decay to identifiers
-        rhs: Box<Expression>,
+        lhs: String,
+        rhs: String,
     },
     Assignment {
         identifier: Box<Expression>,
         value: Box<Expression>,
     },
     FunctionCall {
-        identifier: Box<Expression>, // in case i want function pointers (foo())()
+        identifier: Box<Expression>, // in case i want function pointers or closures (foo())()
         args: Vec<Box<Expression>>,
     },
     ArrayAccess {
@@ -91,10 +109,24 @@ pub enum Expression {
     },
 }
 
+// #[derive(Debug, Clone)]
+// pub struct Parameter {
+//     pub name: String,
+//     pub t: Type,
+// }
+
+// #[derive(Debug, Clone)]
+// pub struct Member {
+//     pub name: String,
+//     pub t: Type,
+//     pub public: bool,
+// }
+
 #[derive(Debug, Clone)]
 pub enum Statement {
     ParseError, // used for panic mode
-    ExpressionStatement(Expression),
+    // Program(Vec<Box<Statement>>),
+    ExpressionStatement(Box<Expression>),
     Block(Vec<Box<Statement>>),
     VariableDeclaration {
         identifier: String,
@@ -104,11 +136,11 @@ pub enum Statement {
         public: bool,
         global: bool,
     },
-    // EnumDeclaration {
-    //     name: String,
-    //     varients: Vec<String>,
-    //     public: bool,
-    // },
+    EnumDeclaration {
+        name: String,
+        varients: Vec<String>,
+        public: bool,
+    },
     Parameter {
         name: String,
         t: Type,
@@ -131,7 +163,7 @@ pub enum Statement {
     StructDeclaration {
         name: String,
         members: Vec<Box<Statement>>, // vec of members
-        methods: Vec<Box<Statement>>, // vec of function decs.
+        // methods: Vec<Box<Statement>>, // vec of function decs.
         public: bool,
     },
     IfStatement {
@@ -139,10 +171,23 @@ pub enum Statement {
         block: Box<Statement>,
         alt: Option<Box<Statement>>,
     },
+    // ElseStatement {
+    //     body: Box<Statement>,
+    // },
     WhileStatement {
         condition: Box<Expression>,
         block: Box<Statement>,
     },
+}
+
+pub struct Parser {
+    input: Vec<lexer::DebugToken>,
+    i: usize,
+    types: HashMap<String, Type>,
+    panic: bool,
+    out: Vec<Statement>,
+    lines: Vec<String>,
+    src_path: String,
 }
 
 // helpers
@@ -172,7 +217,7 @@ impl Parser {
             i: 0,
             types,
             panic: false,
-            // out: Vec::new(),
+            out: Vec::new(),
             lines,
             src_path,
         }
@@ -240,7 +285,7 @@ impl Parser {
         return false;
     }
 
-    fn create_binary(&self, lhs: Expression, operator: lexer::Token, rhs: Expression) -> Expression {
+    fn create_binary(&self, lhs: Expression, operator: Operator, rhs: Expression) -> Expression {
         Expression::Binary {
             lhs: Box::new(lhs),
             operator,
@@ -248,7 +293,7 @@ impl Parser {
         }
     }
 
-    fn create_unary(&self, operator: lexer::Token, member: Expression) -> Expression {
+    fn create_unary(&self, operator: Operator, member: Expression) -> Expression {
         Expression::Unary {
             operator,
             member: Box::new(member),
@@ -286,20 +331,26 @@ impl Parser {
         self.previous() == lexer::Token::Pub
     }
 
-    fn parse_array_expr(&mut self, expr: Expression) -> i64 {
-        // dbg!(&expr);
+    fn parse_array_expr(&mut self, expr: Expression, positive: bool) -> i64 {
         match expr {
-            Expression::Int(val) => return val,
+            Expression::Int(val) => {
+                if positive && val < 1 {
+                    self.error("array size must be larger than 0.");
+                    return 0;
+                }
+
+                return val;
+            }
             Expression::Binary { lhs, operator, rhs } => {
-                let elhs = self.parse_array_expr(*lhs);
-                let erhs = self.parse_array_expr(*rhs);
+                let elhs = self.parse_array_expr(*lhs, false);
+                let erhs = self.parse_array_expr(*rhs, false);
 
                 match operator {
-                    lexer::Token::Plus => elhs + erhs,
-                    lexer::Token::Minus => elhs - erhs,
-                    lexer::Token::Star => elhs * erhs,
-                    lexer::Token::Slash => elhs / erhs,
-                    lexer::Token::Percent => elhs % erhs,
+                    Operator::Add => elhs + erhs,
+                    Operator::Subtract => elhs - erhs,
+                    Operator::Multiply => elhs * erhs,
+                    Operator::Divide => elhs / erhs,
+                    Operator::Modulus => elhs % erhs,
                     _ => {
                         self.error("Unallowed expression.");
                         return 0;
@@ -316,16 +367,11 @@ impl Parser {
     fn parse_type(&mut self) -> Type {
         match self.current() {
             lexer::Token::LBrace => {
-                self.advance();
-                let mut size: Option<usize> = None;
+                self.advance(); // consume LBrace
+                let mut size = None;
                 if !self.match_advance(&[lexer::Token::Underscore]) {
                     let expr = self.term();
-                    let inferred_size = self.parse_array_expr(expr);
-                    if inferred_size < 1 {
-                        self.error("array size must be larger than 0");
-                    }
-
-                    size = Some(inferred_size as usize);
+                    size = Some(self.parse_array_expr(expr, true) as usize);
                 }
 
                 if !self.expect(lexer::Token::RBrace, "expected closing brace.") {
@@ -336,7 +382,7 @@ impl Parser {
                     t: Box::new(self.parse_type()),
                     size,
                 }
-            } 
+            }
             lexer::Token::Star => {
                 self.advance(); // consumes the star
                 Type::Pointer(Box::new(self.parse_type()))
@@ -350,8 +396,8 @@ impl Parser {
                 }
             }
             _ => {
-                self.error("expected type");
-                Type::Void
+                self.error("expected type.");
+                return Type::Void;
             }
         }
     }
@@ -361,6 +407,7 @@ impl Parser {
     }
 }
 
+// panic mode
 impl Parser {
     fn error(&mut self, msg: &str) {
         if self.panic {
@@ -393,8 +440,8 @@ impl Parser {
                 | lexer::Token::Else
                 | lexer::Token::For
                 | lexer::Token::While
-                | lexer::Token::Return => {
-                // | lexer::Token::RCurly => {
+                | lexer::Token::Return
+                | lexer::Token::RCurly => {
                     return;
                 }
                 _ => {}
@@ -414,9 +461,9 @@ impl Parser {
         }
 
         let out = match self.current() {
-            lexer::Token::Fn => self.function_declaration(),
+            lexer::Token::Fn => self.function_declaration(None),
             lexer::Token::Struct => self.struct_declaration(),
-            // lexer::Token::Enum => self.enum_declaration(),
+            lexer::Token::Enum => self.enum_declaration(),
             lexer::Token::Let | lexer::Token::Const => self.variable_declaration(true),
             _ => {
                 self.error("unrecognized top level expression");
@@ -433,13 +480,13 @@ impl Parser {
         return out;
     }
 
-    // fn function_declaration(&mut self, struct_name: Option<String>) -> Statement {
-    fn function_declaration(&mut self) -> Statement {
+    // option for even more struct desugaring
+    fn function_declaration(&mut self, struct_name: Option<String>) -> Statement {
         let public = self.is_public();
 
         self.advance(); // consume fn token
         let mut identifier = self.primary();
-        let name = self.unwrap_identifier(identifier, "expected function name in after keyword 'fn'");
+        let mut name = self.unwrap_identifier(identifier, "expected function name in after keyword 'fn'");
 
         self.expect(lexer::Token::LParen, "expected '(' after function name.");
 
@@ -476,9 +523,9 @@ impl Parser {
 
         let return_type = self.parse_type();
 
-        // if let Some(n) = struct_name {
-        //     name = std::format!("{}@{}", n, name);
-        // }
+        if let Some(n) = struct_name {
+            name = std::format!("{}@{}", n, name);
+        }
 
         let body = Box::new(self.block());
         Statement::FunctionDeclaration {
@@ -542,7 +589,7 @@ impl Parser {
             };
         }
 
-        let mut methods: Vec<Box<Statement>> = Vec::new();
+        // let mut methods: Vec<Statement> = Vec::new();
         loop {
             if self.current() == lexer::Token::Pub {
                 self.advance();
@@ -550,8 +597,8 @@ impl Parser {
             }
 
             if self.current() == lexer::Token::Fn {
-                methods.push(Box::new(self.function_declaration()));
-                // self.out.push(method);
+                let method = self.function_declaration(Some(struct_name.clone()));
+                self.out.push(method);
             } else {
                 break;
             }
@@ -569,48 +616,48 @@ impl Parser {
         return Statement::StructDeclaration {
             name: struct_name,
             members,
-            methods,
+            // methods,
             public: struct_public,
         };
     }
 
-    // fn enum_declaration(&mut self) -> Statement {
-    //     let public = self.is_public();
-    //     self.advance(); // consume enum token
-    //     let mut identifier = self.primary();
-    //     let name = self.unwrap_identifier(identifier, "expected identifier in enum declaration.");
-    //
-    //     let mut varients: Vec<String> = Vec::new();
-    //
-    //     if !self.expect(lexer::Token::LCurly, "expected body in enum declaration.") {
-    //         return Statement::ParseError;
-    //     }
-    //
-    //     while self.current() != lexer::Token::RCurly {
-    //         identifier = self.primary();
-    //         varients.push(self.unwrap_identifier(identifier, "expected varient in enum body."));
-    //
-    //         let token = self.current();
-    //         if token != lexer::Token::Comma && token != lexer::Token::RCurly {
-    //             self.error("expected comma seperating enum varients.");
-    //         }
-    //
-    //         if token == lexer::Token::Comma {
-    //             self.advance();
-    //         }
-    //     }
-    //
-    //     self.expect(
-    //         lexer::Token::RCurly,
-    //         "expected closing right curly after enum declaration.",
-    //     );
-    //
-    //     Statement::EnumDeclaration {
-    //         name,
-    //         varients,
-    //         public,
-    //     }
-    // }
+    fn enum_declaration(&mut self) -> Statement {
+        let public = self.is_public();
+        self.advance(); // consume enum token
+        let mut identifier = self.primary();
+        let name = self.unwrap_identifier(identifier, "expected identifier in enum declaration.");
+
+        let mut varients: Vec<String> = Vec::new();
+
+        if !self.expect(lexer::Token::LCurly, "expected body in enum declaration.") {
+            return Statement::ParseError;
+        }
+
+        while self.current() != lexer::Token::RCurly {
+            identifier = self.primary();
+            varients.push(self.unwrap_identifier(identifier, "expected varient in enum body."));
+
+            let token = self.current();
+            if token != lexer::Token::Comma && token != lexer::Token::RCurly {
+                self.error("expected comma seperating enum varients.");
+            }
+
+            if token == lexer::Token::Comma {
+                self.advance();
+            }
+        }
+
+        self.expect(
+            lexer::Token::RCurly,
+            "expected closing right curly after enum declaration.",
+        );
+
+        Statement::EnumDeclaration {
+            name,
+            varients,
+            public,
+        }
+    }
  
     fn get_implicit_array_length(&mut self, array_type: Type, rhs: Option<Box<Expression>>) -> Type {
         match array_type {
@@ -770,6 +817,11 @@ impl Parser {
             if self.current() == lexer::Token::If {
                 alt = Some(Box::new(self.if_statement()));
             } else {
+                // let else_block = Statement::ElseStatement { 
+                //     body: Box::new(self.block()),
+                // };
+
+                // alt = Some(Box::new(else_block));
                 alt = Some(Box::new(self.block()));
             }
         }
@@ -784,7 +836,10 @@ impl Parser {
     fn return_statement(&mut self) -> Statement {
         self.advance(); // consume return token
         let expression = self.expression();
-        self.expect(lexer::Token::Semicolon, "expected semicolon after return statement.");
+        self.expect(
+            lexer::Token::Semicolon,
+            "expected semicolon after return statement.",
+        );
 
         Statement::Return {
             value: Box::new(expression),
@@ -792,7 +847,7 @@ impl Parser {
     }
 
     fn expression_statement(&mut self) -> Statement {
-        let out = Statement::ExpressionStatement(self.expression());
+        let out = Statement::ExpressionStatement(Box::new(self.expression()));
         self.expect(lexer::Token::Semicolon, "expected semicolon.");
         return out;
     }
@@ -802,21 +857,19 @@ impl Parser {
 impl Parser {
     pub fn parse(&mut self) -> Option<Vec<Statement>> {
         // let mut program: Vec<Box<Statement>> = Vec::new();
-        let mut program: Vec<Statement> = Vec::new();
+        // let mut program: Vec<Statement> = Vec::new();
         while !self.at_end() && self.current() != lexer::Token::EOF {
             let statement = self.declaration();
-            program.push(statement);
-            // self.out.push(statement);
+            self.out.push(statement);
             // for statement in self.declaration() {
             //     program.push(statement);
             // }
-        };
+        }
 
         // Some(Statement::Program(program))
-        Some(program)
         // Some(program)
-        //
-        // Some(self.out.clone())
+        // Some(program)
+        Some(self.out.clone())
     }
 
     fn expression(&mut self) -> Expression {
@@ -839,10 +892,24 @@ impl Parser {
             lexer::Token::DoubleLeftCaret,
             lexer::Token::DoubleRightCaret,
         ]) {
-            let operator = self.previous();
+            let operator = match self.previous() {
+                lexer::Token::Equal => Operator::Equal,
+                lexer::Token::PlusEqual => Operator::Add,
+                lexer::Token::MinusEqual => Operator::Subtract,
+                lexer::Token::StarEqual => Operator::Multiply,
+                lexer::Token::SlashEqual => Operator::Divide,
+                lexer::Token::PercentEqual => Operator::Modulus,
+                lexer::Token::PipeEqual => Operator::BitwiseOr,
+                lexer::Token::AmpersandEqual => Operator::BitwiseAnd,
+                lexer::Token::CaretEqual => Operator::BitwiseXOr,
+                lexer::Token::DoubleLeftCaret => Operator::BitwiseLeftShift,
+                lexer::Token::DoubleRightCaret => Operator::BitwiseRightShift,
+                _ => unreachable!(),
+            };
+
             let rhs = self.expression();
 
-            if operator == lexer::Token::Equal {
+            if operator == Operator::Equal {
                 expr = Expression::Assignment {
                     identifier: Box::new(expr),
                     value: Box::new(rhs),
@@ -863,9 +930,8 @@ impl Parser {
         let mut expr = self.logical_and();
 
         while self.match_advance(&[lexer::Token::DoublePipe]) {
-            let operator = self.previous();
             let rhs = self.logical_and();
-            expr = self.create_binary(expr, operator, rhs);
+            expr = self.create_binary(expr, Operator::LogicalOr, rhs);
         }
 
         return expr;
@@ -875,9 +941,8 @@ impl Parser {
         let mut expr = self.comparison();
 
         while self.match_advance(&[lexer::Token::DoubleAmpersand]) {
-            let operator = self.previous();
             let rhs = self.comparison();
-            expr = self.create_binary(expr, operator, rhs);
+            expr = self.create_binary(expr, Operator::LogicalAnd, rhs);
         }
 
         return expr;
@@ -894,7 +959,16 @@ impl Parser {
             lexer::Token::EqualEqual,
             lexer::Token::BangEqual,
         ]) {
-            let operator = self.previous();
+            let operator = match self.previous() {
+                lexer::Token::LeftCaret => Operator::LessThan,
+                lexer::Token::LeftCaretEqual => Operator::LessThanEqual,
+                lexer::Token::RightCaret => Operator::GreaterThan,
+                lexer::Token::RightCaretEqual => Operator::GreaterThanEqual,
+                lexer::Token::EqualEqual => Operator::Equal,
+                lexer::Token::BangEqual => Operator::NotEqual,
+                _ => unreachable!(),
+            };
+
             let rhs = self.bitwise();
             expr = self.create_binary(expr, operator, rhs);
         }
@@ -910,7 +984,13 @@ impl Parser {
             lexer::Token::Pipe,
             lexer::Token::Caret,
         ]) {
-            let operator = self.previous();
+            let operator = match self.previous() {
+                lexer::Token::Ampersand => Operator::BitwiseAnd,
+                lexer::Token::Pipe => Operator::BitwiseOr,
+                lexer::Token::Caret => Operator::BitwiseXOr,
+                _ => unreachable!(),
+            };
+
             let rhs = self.bitshift();
             expr = self.create_binary(expr, operator, rhs);
         }
@@ -925,7 +1005,12 @@ impl Parser {
             lexer::Token::DoubleLeftCaret,
             lexer::Token::DoubleRightCaret,
         ]) {
-            let operator = self.previous();
+            let operator = match self.previous() {
+                lexer::Token::DoubleLeftCaret => Operator::BitwiseLeftShift,
+                lexer::Token::DoubleRightCaret => Operator::BitwiseRightShift,
+                _ => unreachable!(),
+            };
+
             let rhs = self.term();
             expr = self.create_binary(expr, operator, rhs);
         }
@@ -937,7 +1022,12 @@ impl Parser {
         let mut expr = self.factor();
 
         while self.match_advance(&[lexer::Token::Plus, lexer::Token::Minus]) {
-            let operator = self.previous(); 
+            let operator = match self.previous() {
+                lexer::Token::Plus => Operator::Add,
+                lexer::Token::Minus => Operator::Subtract,
+                _ => unreachable!(),
+            };
+
             let rhs = self.factor();
             expr = self.create_binary(expr, operator, rhs);
         }
@@ -953,7 +1043,13 @@ impl Parser {
             lexer::Token::Slash,
             lexer::Token::Percent,
         ]) {
-            let operator = self.previous();
+            let operator = match self.previous() {
+                lexer::Token::Star => Operator::Multiply,
+                lexer::Token::Slash => Operator::Divide,
+                lexer::Token::Percent => Operator::Modulus,
+                _ => unreachable!(),
+            };
+
             let rhs = self.unary();
             expr = self.create_binary(expr, operator, rhs);
         }
@@ -968,7 +1064,14 @@ impl Parser {
             lexer::Token::Minus,
             lexer::Token::Ampersand,
         ]) {
-            let operator = self.previous();
+            let operator = match self.previous() {
+                lexer::Token::Bang => Operator::LogicalNot,
+                lexer::Token::Tilde => Operator::BitwiseNot,
+                lexer::Token::Minus => Operator::Negate,
+                lexer::Token::Ampersand => Operator::Reference,
+                _ => unreachable!(),
+            };
+
             let rhs = self.unary();
             return self.create_unary(operator, rhs);
         }
@@ -985,12 +1088,8 @@ impl Parser {
                 // if foo {
                 //      ...
                 // }
-                // or:
-                // while foo {
-                //      ...
-                // }
                 if let Some(token) = self.peek(-1) {
-                    if [lexer::Token::If, lexer::Token::While].contains(&token) {
+                    if token == lexer::Token::If {
                         return expr;
                     }
                 }
@@ -1008,7 +1107,7 @@ impl Parser {
                             );
                         }
 
-                        let member_identifier = self.struct_constructor();
+                        let member_identifier = self.primary();
                         let member_name = self.unwrap_identifier(
                             member_identifier,
                             "expected identifier in struct constructor.",
@@ -1055,15 +1154,42 @@ impl Parser {
             expr = match self.current() {
                 lexer::Token::DotStar => {
                     self.advance(); // consume operator
-                    self.create_unary(lexer::Token::DotStar, expr)
+                    self.create_unary(Operator::Dereference, expr)
                 }
                 lexer::Token::Dot => {
                     self.advance();
                     let rhs = self.primary();
 
+                    // // desugar foo.bar() -> foo.bar(*foo);
+                    // match rhs {
+                    //     Expression::FunctionCall { identifier, mut args } => {
+                    //         args.insert(0, Box::new( Expression::Unary { 
+                    //             operator: Operator::Reference,
+                    //             member: Box::new(expr.clone()),
+                    //         }));
+                    //
+                    //         rhs = Expression::FunctionCall { identifier, args } 
+                    //     },
+                    //     _ => {}
+                    // }
+                    
+                    // match expr.clone() {
+                    //     Expression::Identifier(lhs_val) => {
+                    //         match rhs {
+                    //             Expression::Identifier(rhs_val) => {
+                    //                 return Expression::Identifier(std::format!("{}@{}", lhs_val, rhs_val));
+                    //             }
+                    //         _ => {}
+                    //         }
+                    //     } 
+                    //     _ => {}
+                    // };
+
+                    let parent = self.unwrap_identifier(expr, "dot operator only works with identifiers.");
+                    let child = self.unwrap_identifier(rhs, "dot operator only works with identifiers.");
                     Expression::Dot {
-                        lhs: Box::new(expr),
-                        rhs: Box::new(rhs),
+                        lhs: parent,
+                        rhs: child,
                     }
                 }
                 lexer::Token::LParen => {
@@ -1089,11 +1215,15 @@ impl Parser {
                     // Desugaring!
                     // foo.bar() -> foo.bar(&foo)
                     match expr.clone() {
-                        Expression::Dot { lhs, rhs: _ } => {
+                        Expression::Binary { lhs, operator, rhs } => {
                             args.insert(0, Box::new(Expression::Unary { 
-                                operator: lexer::Token::Ampersand, 
+                                operator: Operator::Reference, 
                                 member: lhs.clone(),
                             }));
+
+                            // TODO: foo.bar(&foo) -> foo@bar(&foo)
+                            if operator == Operator::Dot {
+                            }
                         }
                         _ => {}
                     };

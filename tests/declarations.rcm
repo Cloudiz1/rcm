@@ -1,11 +1,11 @@
-pub enum EToken {
-	Number, 
-	Plus,
-	Minus,
-	Star,
-	Slash,
-	Equal,
-}
+// pub enum EToken {
+// 	Number,
+// 	Plus,
+//	Minus,
+//	Star,
+//	Slash,
+//	Equal,
+// }
 
 struct Token {
 	type: EToken,

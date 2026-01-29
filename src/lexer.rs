@@ -380,7 +380,7 @@ impl Tokenizer {
 
     fn get_token(&mut self) -> Option<Token> {
         self.skip_whitespace();
-        self.skip_comment();
+        // self.skip_comment();
 
         let Some(c) = self.current() else {
             return None;
@@ -409,7 +409,23 @@ impl Tokenizer {
             '+' => self.operation_and_assignment(Token::Plus, Token::PlusEqual),
             '-' => self.operation_and_assignment(Token::Minus, Token::MinusEqual),
             '*' => self.operation_and_assignment(Token::Star, Token::StarEqual),
-            '/' => self.operation_and_assignment(Token::Slash, Token::SlashEqual),
+            '/' => {
+                if let Some(n) = self.peek() {
+                    if n == '/' {
+                        self.advance(); // skips the double slash
+                                        //
+                        while let Some(c) = self.current() {
+                            if c == '\n' {
+                                return None;
+                            }
+                            
+                            self.advance();
+                        }
+                    };
+                }
+
+                return Some(self.operation_and_assignment(Token::Slash, Token::SlashEqual));
+            }
             '%' => self.operation_and_assignment(Token::Percent, Token::PercentEqual),
             '!' => self.operation_and_assignment(Token::Bang, Token::BangEqual),
             '~' => Token::Tilde,

@@ -27,5 +27,5 @@ fn main() {
         return;
     };
 
-    // println!("{:#?}", ast);
+    println!("{:#?}", ast);
 }

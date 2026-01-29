@@ -1,17 +1,31 @@
-struct foo {
-	bar: i32,
-	baz: i32,
-
-	pub fn add(self: *foo) i32 {
-		return 1 + 2 * 3;
+struct inner_struct {
+	a: f64,
+	b: f64,
+	
+	pub fn add(self: *inner_struct) f64 {
+		return a + b;
 	}
 }
 
-pub fn main() void {
-	foo {
-		bar: 1 + 2 * 3,
-		baz: 35,
+struct foo {
+	bar: i32,
+	baz: i32,
+	qux: inner_struct
+
+	pub fn add(self: *foo) i32 {
+		return self.bar + self.baz;
+	}
+}
+
+fn main() void {
+	let s = foo {
+		bar: 3,
+		baz: 4,
+		qux: inner_struct {
+			a: 3.14,
+			b: 1.618
+		}
 	};
 
-	foo.a();
+	s.qux.add();
 }

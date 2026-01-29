@@ -1,7 +1,7 @@
 pub fn main() void {
 	let i;
 	let a = 1;
-	while {
+	while a {
 		a *= 2;
 	}
 }
