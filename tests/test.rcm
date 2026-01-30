@@ -1,3 +1,4 @@
+const a: i32 = 1;
 pub fn main() void {
 	let a = "abc";
 	let b = "abc";

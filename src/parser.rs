@@ -40,6 +40,7 @@ pub struct Parser {
     // out: Vec<Statement>,
     lines: Vec<String>,
     src_path: String,
+    errored: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +176,7 @@ impl Parser {
             // out: Vec::new(),
             lines,
             src_path,
+            errored: false,
         }
     }
 
@@ -356,9 +358,9 @@ impl Parser {
         }
     }
 
-    fn print(&self) {
-        println!("{:?}", self.current());
-    }
+    // fn print(&self) {
+    //     println!("{:?}", self.current());
+    // }
 }
 
 impl Parser {
@@ -375,6 +377,7 @@ impl Parser {
         }
 
         self.panic = true;
+        self.errored = true;
     }
 
     fn synchronize(&mut self) {
@@ -679,14 +682,10 @@ impl Parser {
     }
 
     fn variable_declaration(&mut self, global: bool) -> Statement {
-        let mut public = false;
+        let public = self.is_public();
 
-        if global {
-            if self.current() == lexer::Token::Pub {
-                public = true;
-            } else {
-                self.error("Only top level variable declarations can be public.");
-            }
+        if global && public {
+            self.error("Only top level variable declarations can be public.");
         }
 
         let mut constant = false;
@@ -694,6 +693,11 @@ impl Parser {
         let mut initial_value: Option<Box<Expression>> = None;
         if self.consume() == lexer::Token::Const {
             constant = true;
+        }
+
+        if global && !constant {
+            self.error("global declarations must be constant");
+            return Statement::ParseError;
         }
 
         let expr = self.primary();
@@ -801,22 +805,17 @@ impl Parser {
 // expressions
 impl Parser {
     pub fn parse(&mut self) -> Option<Vec<Statement>> {
-        // let mut program: Vec<Box<Statement>> = Vec::new();
         let mut program: Vec<Statement> = Vec::new();
-        while !self.at_end() && self.current() != lexer::Token::EOF {
+        while !self.at_end() {
             let statement = self.declaration();
             program.push(statement);
-            // self.out.push(statement);
-            // for statement in self.declaration() {
-            //     program.push(statement);
-            // }
         };
 
-        // Some(Statement::Program(program))
+        if self.errored {
+            return None;
+        }
+
         Some(program)
-        // Some(program)
-        //
-        // Some(self.out.clone())
     }
 
     fn expression(&mut self) -> Expression {

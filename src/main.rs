@@ -4,6 +4,7 @@ use std::fs;
 pub mod util;
 pub mod lexer;
 pub mod parser;
+pub mod analysis;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -27,5 +28,10 @@ fn main() {
         return;
     };
 
-    println!("{:#?}", ast);
+    // dbg!(&ast);
+
+    let mut analyzer = analysis::Analyzer::new();
+    analyzer.analyze(ast);
+
+    // println!("{:#?}", ast);
 }

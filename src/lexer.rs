@@ -88,8 +88,6 @@ pub enum Token {
     Null,
     Newline,
     Tab,
-
-    EOF,
 }
 
 #[derive(Clone, Debug)]
