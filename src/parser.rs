@@ -10,7 +10,7 @@ pub enum Type {
         t: Box<Type>,
         size: Option<usize>, // this will always be known when passed to TAC
     },
-    Typedef(String),
+    Struct(String),
     // Struct {
     //     members: HashMap<String, Type>,
     //     methods: HashMap<String, Type>,
@@ -30,6 +30,35 @@ pub enum Type {
     Void,
     Str,
     Char,
+}
+
+impl std::fmt::Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Type::Pointer(nested_type) => {
+                write!(f, "*{}", *nested_type)
+            }
+            Type::Array { t, size: _ } => {
+                write!(f, "[{}]", *t)
+            }
+            Type::Struct(t) => write!(f, "{}", t),
+            Type::I8 => write!(f, "i8"),
+            Type::U8 => write!(f, "u8"),
+            Type::I16 => write!(f, "i16"),
+            Type::U16 => write!(f, "u16"),
+            Type::I32 => write!(f, "i32"),
+            Type::U32 => write!(f, "u32"),
+            Type::I64 => write!(f, "i64"),
+            Type::U64 => write!(f, "u64"),
+            Type::F16 => write!(f, "f16"),
+            Type::F32 => write!(f, "f32"),
+            Type::F64 => write!(f, "f64"),
+            Type::Bool => write!(f, "bool"),
+            Type::Void => write!(f, "void"),
+            Type::Str => write!(f, "string"),
+            Type::Char => write!(f, "char"),
+        }
+    }
 }
 
 pub struct Parser {
@@ -64,7 +93,7 @@ pub enum Expression {
     },
     Dot {
         lhs: Box<Expression>, // these have to decay to identifiers
-        rhs: Box<Expression>,
+        rhs: String, // because its left associative, rhs will always be a string!
     },
     Assignment {
         identifier: Box<Expression>,
@@ -271,13 +300,12 @@ impl Parser {
     }
 
     fn unwrap_identifier(&mut self, i: Expression, msg: &str) -> String {
-        match i {
-            Expression::Identifier(identifier) => identifier,
-            _ => {
-                self.error(msg);
-                return "".to_owned();
-            }
-        }
+        if let Expression::Identifier(identifier) = i {
+            return identifier;
+        };
+
+        self.error(msg);
+        return "".to_owned();
     }
 
     fn is_public(&mut self) -> bool {
@@ -348,7 +376,7 @@ impl Parser {
                 if let Some(t) = self.types.get(&identifier) {
                     return t.clone();
                 } else {
-                    return Type::Typedef(identifier);
+                    return Type::Struct(identifier);
                 }
             }
             _ => {
@@ -467,11 +495,8 @@ impl Parser {
                 continue;
             }
 
-            match self.current() {
-                lexer::Token::Identifier(_) => {
-                    self.error("missing comma between function parameters.");
-                }
-                _ => {}
+            if let lexer::Token::Identifier(_) = self.current() {
+                self.error("missing comma between function parameters.");
             }
         }
 
@@ -514,35 +539,31 @@ impl Parser {
                 continue;
             }
 
-            match self.current() {
-                lexer::Token::Identifier(identifier) => {
-                    if !comma {
-                        self.error("expected comma between member declarations");
-                    }
-
-                    let public: bool = self.is_public();
-                    self.advance(); // consume the identifier
-                    self.expect(
-                        lexer::Token::Colon,
-                        "expected colon folllowing member declaration",
-                    );
-
-                    let t = self.parse_type();
-
-                    comma = false;
-                    if self.current() == lexer::Token::Comma {
-                        comma = true;
-                        self.advance();
-                    }
-
-                    members.push(Box::new(Statement::Member {
-                        name: identifier,
-                        t,
-                        public,
-                    }));
-                }
-                _ => break,
+            let lexer::Token::Identifier(identifier) = self.current() else {
+                break
             };
+
+            if !comma {
+                self.error("expected comma between member declarations");
+            }
+
+            let public: bool = self.is_public();
+            self.advance(); // consume the identifier
+            self.expect(lexer::Token::Colon,"expected colon folllowing member declaration");
+
+            let t = self.parse_type();
+
+            comma = false;
+            if self.current() == lexer::Token::Comma {
+                comma = true;
+                self.advance();
+            }
+
+            members.push(Box::new(Statement::Member {
+                name: identifier,
+                t,
+                public,
+            }));
         }
 
         let mut methods: Vec<Box<Statement>> = Vec::new();
@@ -554,7 +575,6 @@ impl Parser {
 
             if self.current() == lexer::Token::Fn {
                 methods.push(Box::new(self.function_declaration()));
-                // self.out.push(method);
             } else {
                 break;
             }
@@ -1058,11 +1078,12 @@ impl Parser {
                 }
                 lexer::Token::Dot => {
                     self.advance();
-                    let rhs = self.primary();
+                    let rhs_expr = self.primary();
+                    let rhs = self.unwrap_identifier(rhs_expr, "rhs of dot operator must be an identifier");
 
                     Expression::Dot {
                         lhs: Box::new(expr),
-                        rhs: Box::new(rhs),
+                        rhs: rhs,
                     }
                 }
                 lexer::Token::LParen => {

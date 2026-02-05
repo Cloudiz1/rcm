@@ -3,11 +3,17 @@
 // this ast should have types built in
 // id like to remove all Option<T>, feels dumb to have uncertainty in codegen
 // this also leads to a good time for compiler expansions/desugaring
-// id like to collect a symbol table too
+// id like to collect a symbol table too (mostly done, needs type inference for variables)
 
+use crate::lexer;
 use crate::parser;
 use std::collections::HashMap;
 
+fn variant_eq(a: &parser::Type, b: &parser::Type) -> bool {
+    std::mem::discriminant(a) == std::mem::discriminant(b)
+}
+
+#[derive(Debug, Clone)]
 enum Symbol {
     Function {
         public: bool,
@@ -23,9 +29,47 @@ enum Symbol {
     Struct {
         public: bool,
         members: HashMap<String, Symbol>,
-        methods: HashMap<String, Symbol>,
+        // methods: HashMap<String, Symbol>,
+        typedef: String,
     },
     Member(parser::Type),
+}
+
+trait Type {
+    fn get_type(&self) -> parser::Type;
+    // fn get_size(&self) -> Option<usize>;
+}
+
+// variable type must be known when you call this method
+impl Type for Symbol {
+    fn get_type(&self) -> parser::Type {
+        match self {
+            Symbol::Variable {
+                variable_type,
+                constant: _,
+                public: _,
+            } => {
+                return variable_type.clone();
+            }
+            Symbol::Function {
+                params: _,
+                return_type,
+                public: _,
+            } => return_type.clone(),
+            Symbol::Struct {
+                members: _,
+                // methods: _,
+                public: _,
+                typedef,
+            } => parser::Type::Struct(typedef.clone()),
+            _ => panic!("can not get type."),
+            // Symbol::Enum {
+            //     varients: _,
+            //     public: _,
+            //     typedef,
+            // } => Some((*typedef).clone()),
+        }
+    }
 }
 
 fn create_symbol_entry(statement: parser::Statement) -> (String, Symbol) {
@@ -66,22 +110,22 @@ fn create_symbol_entry(statement: parser::Statement) -> (String, Symbol) {
             for member in members {
                 let (name, symbol) = create_symbol_entry(*member);
                 check_definition_single(&symbol_members, &name);
-                add_symbol(&mut symbol_members, name, symbol);
+                symbol_members.insert(name, symbol);
             }
 
-            let mut symbol_methods: HashMap<String, Symbol> = HashMap::new();
             for method in methods {
                 let (name, symbol) = create_symbol_entry(*method);
                 check_definition_single(&symbol_members, &name);
-                add_symbol(&mut symbol_methods, name, symbol);
+                symbol_members.insert(name, symbol);
             }
 
             return (
-                name,
+                name.clone(),
                 Symbol::Struct { 
                     public, 
                     members: symbol_members, 
-                    methods: symbol_methods,
+                    // methods: symbol_methods,
+                    typedef: name,
                 }
             )
         }
@@ -136,19 +180,163 @@ fn check_definition(tables: &Vec<HashMap<String, Symbol>>, identifier: &String) 
     return false;
 }
 
-fn add_symbol(table: &mut HashMap<String, Symbol>, name: String, symbol: Symbol) {
-    // let (name, symbol) = create_symbol_entry(statement);
-    // if check_definition(tables, &name) {
-    //     panic!("identifier {} is already declared.", name);
-    // }
-
-    // let index = tables.len() - 1;
-    // let table = &mut tables[index];
-    table.insert(name, symbol);
-}
 
 pub struct Analyzer {
     tables: Vec<HashMap<String, Symbol>>,
+}
+
+// Types
+impl Analyzer {
+    fn get_symbol(&mut self, identifier: &String) -> Option<Symbol> {
+        let len = self.tables.len();
+        for i in 0..len {
+            if let Some(symbol) = self.tables[i].get(identifier) {
+                return Some(symbol.clone());
+            }
+        }
+
+        return None;
+    }
+
+    fn get_type(&mut self, expr: parser::Expression) -> parser::Type {
+        match expr {
+            parser::Expression::Null => parser::Type::Void,
+            parser::Expression::Int(_) => parser::Type::I32,
+            parser::Expression::Float(_) => parser::Type::F64,
+            parser::Expression::String(_) => unimplemented!(),
+            parser::Expression::Char(_) => parser::Type::Char,
+            parser::Expression::Bool(_) => parser::Type::Bool,
+            parser::Expression::Identifier(val) => {
+                if let Some(symbol) = self.get_symbol(&val) {
+                    return symbol.get_type();
+                }
+
+                panic!("unrecognized identifier");
+            }
+            parser::Expression::Unary { operator, member } => {
+                match operator {
+                    lexer::Token::Tilde => parser::Type::I32,
+                    lexer::Token::Bang => parser::Type::Bool,
+                    lexer::Token::Ampersand => parser::Type::I32,
+                    lexer::Token::DotStar => {
+                        self.get_type(*member)
+                    }
+                    _ => panic!("unexpected operator in unary expression. found: {:?}", operator),
+                }
+            }
+            parser::Expression::Binary { lhs, operator, rhs } => {
+                let lhs_type = self.get_type(*lhs); 
+                let rhs_type = self.get_type(*rhs); 
+
+                let boolean_expr = match operator {
+                    lexer::Token::DoublePipe
+                    | lexer::Token::DoubleAmpersand
+                    | lexer::Token::Equal
+                    | lexer::Token::BangEqual
+                    | lexer::Token::LeftCaret
+                    | lexer::Token::RightCaret
+                    | lexer::Token::LeftCaretEqual
+                    | lexer::Token::RightCaretEqual => true,
+                    _ => false,
+                };
+
+                if boolean_expr {
+                    // TODO: all equality operations, however, must be between ints
+                    // TODO: maybe let null be an int?
+                    return parser::Type::Bool;
+                }
+                
+                if lhs_type != rhs_type {
+                    panic!("expected type {} found type {}", lhs_type, rhs_type);
+                }
+                
+                return lhs_type;
+            }
+            parser::Expression::Dot { lhs, rhs } => {
+                let lhs_type = self.get_type(*lhs);
+                let parser::Type::Struct(identifier) = lhs_type.clone() else {
+                    panic!("dot operator can not be applied to type {}", lhs_type);
+                };
+
+                let Some(lhs_symbol) = self.get_symbol(&identifier) else {
+                    panic!("{} is not defined", identifier);
+                };
+
+                let Symbol::Struct { 
+                    members, 
+                    typedef,
+                    ..
+                } = lhs_symbol else {
+                    panic!("expected struct type, found type {}", lhs_type);
+                };
+
+                let Some(member) = members.get(&rhs) else {
+                    panic!("struct {} does not contain member {}", typedef, rhs);
+                };
+
+                return member.get_type();
+            }
+            parser::Expression::Assignment { identifier, value } => {
+                let lhs_type = self.get_type(*identifier);
+                let rhs_type = self.get_type(*value);
+
+                if lhs_type == rhs_type {
+                    return lhs_type;
+                }
+
+                // TODO: type assignment should be stricter, assignment type should overwrite
+                
+                // match lhs_type {
+                //     parser::Type::
+                // }
+                unimplemented!("assignement casts");
+            }
+            parser::Expression::FunctionCall { identifier, args: _ } => self.get_type(*identifier),
+            parser::Expression::ArrayAccess { identifier, index: _ } => self.get_type(*identifier),
+            parser::Expression::ArrayConstructor { values } => {
+                let expected_type = self.get_type(*values[0].clone());
+                for value in values {
+                    if !variant_eq(&expected_type, &self.get_type(*value)) {
+                        panic!("all expressions in array constructor must have the same type.");
+                    }
+                }
+
+                return expected_type;
+                // self.get_type(*values[0].clone());
+            }
+            parser::Expression::StructMember { 
+                parent, 
+                identifier, 
+                val 
+            } => {
+                return parser::Type::Void;
+            }
+            // TODO: lookup
+            // parser::Expression::StructMember { 
+            //     parent,
+            //     identifier, 
+            //     val 
+            // } => {
+            //     let parent_struct = self.get_symbol(parent);
+            //     match parent_struct {
+            //         Symbol::Struct { 
+            //             members, 
+            //             public 
+            //         } => {
+            //             let Some(child) = members.get(&identifier) else {
+            //                 panic!();
+            //             };
+            //
+            //             return child.get_type()
+            //         }
+            //         _ => panic!(),
+            //     }
+            // }
+            parser::Expression::StructConstructor { identifier, members } => {
+                todo!();
+            }
+        }
+    }
 }
 
 impl Analyzer {
@@ -174,7 +362,7 @@ impl Analyzer {
     fn add_symbol(&mut self, statement: parser::Statement) {
         let (name, symbol) = create_symbol_entry(statement);
         check_definition(&self.tables, &name);
-        add_symbol(self.get_current_table(), name, symbol);
+        self.get_current_table().insert(name, symbol);
     }
 
     fn get_globals(&mut self, ast: Vec<parser::Statement>) {
@@ -183,6 +371,8 @@ impl Analyzer {
             self.add_symbol(statement);
             // add_symbol(&mut self.tables, statement);
         }
+
+        // dbg!(&self.tables);
     }
 
     pub fn analyze(&mut self, ast: Vec<parser::Statement>) {
