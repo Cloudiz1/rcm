@@ -811,10 +811,8 @@ impl Parser {
         self.advance(); // consume return token
 
         let mut value: Option<Box<Expression>> = None;
-        if let Some(token) = self.peek(1) { // empty return!
-            if token == lexer::Token::Semicolon {
-                self.advance();
-            }
+        if self.current() == lexer::Token::Semicolon {
+            self.advance();
         } else { // non empty return
             let expression = self.expression();
             self.expect(lexer::Token::Semicolon, "expected semicolon after return statement.");

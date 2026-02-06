@@ -2,6 +2,7 @@ use crate::lexer;
 use crate::parser;
 use std::collections::HashMap;
 
+// TODO: make this a generic...
 fn variant_eq(a: &parser::Type, b: &parser::Type) -> bool {
     std::mem::discriminant(a) == std::mem::discriminant(b)
 }
@@ -196,6 +197,67 @@ fn allowed_implicit_coercion(lhs: parser::Type, rhs: parser::Type) {
     panic!("can not convert from type {} to type {}", lhs, rhs);
 }
 
+fn does_branch_return(statement: parser::Statement) -> bool {
+    match statement {
+        parser::Statement::Block(statements) => {
+            for s in statements {
+                if let parser::Statement::Return { .. } = *s {
+                    return true;
+                };
+            }
+
+            return false;
+        }
+        _ => unreachable!("Analyzer::does_branch_return(..) should only be called with statement parser::Statement::Block")
+    }
+}
+
+// do NOT call this function if return type is void
+fn does_block_always_return(block: parser::Statement) -> bool {
+    let parser::Statement::Block(statements) = block else {
+        unreachable!("Analyzer::does_block_return(..) should only be called with statement parser::Statement::Block")
+    };
+
+    for statement in statements {
+        // TODO: if its another block, check if that one always returns!
+        
+        // if variant_eq(statement.clone(), &parser::Statement::Block(Vec::new())) {
+        //     if does_block_always_return(statement.clone()) {
+        //         return true;
+        //     }
+        // }
+        match *statement {
+            parser::Statement::Return { .. } => return true,
+            parser::Statement::IfStatement { 
+                condition, 
+                block, 
+                alt 
+            } => {
+                // TODO:
+                // if condition is always true, just check if block returns
+                // if there is an else block, just check if both return (done)
+                // otherwise, return false (done)
+                if let Some(else_block) = alt {
+                    return does_block_always_return(*block) && does_block_always_return(*else_block);
+                }
+
+                return false;
+            }
+            parser::Statement::WhileStatement { 
+                condition, 
+                block 
+            } => {
+                // TODO:
+                // if its always true, just check if it returns!
+                // otherwise, return false
+            }
+            _ => {}
+        }
+    }
+
+    return false;
+}
+
 pub struct Analyzer {
     tables: Vec<HashMap<String, Symbol>>,
 }
@@ -246,7 +308,7 @@ impl Analyzer {
                 let boolean_expr = match operator {
                     lexer::Token::DoublePipe
                     | lexer::Token::DoubleAmpersand
-                    | lexer::Token::Equal
+                    | lexer::Token::EqualEqual
                     | lexer::Token::BangEqual
                     | lexer::Token::LeftCaret
                     | lexer::Token::RightCaret
@@ -300,6 +362,7 @@ impl Analyzer {
                 }
 
                 // TODO: type assignment should be stricter, assignment type should overwrite
+                // i feel like i can do this in codegen actually
                 
                 // match lhs_type {
                 //     parser::Type::
@@ -383,6 +446,24 @@ impl Analyzer {
 
                 if !variant_eq(&return_type, expected_return) {
                     panic!("expected return of type {}, found type {}", expected_return, return_type); 
+                }
+            } 
+            parser::Statement::IfStatement { 
+                condition, 
+                block, 
+                alt 
+            } => {
+                let condition_type = self.get_type(&condition);
+                // TODO:
+                // if foo { .. } (maybe just `if foo { .. }` -> `if foo == null { .. }`?)
+                if !variant_eq(&condition_type, &parser::Type::Bool) {
+                    panic!("condition must contain bool expression");
+                }
+
+                
+                self.analyze_statement(*block, function_return);
+                if let Some(else_block) = alt {
+                    self.analyze_statement(*else_block, function_return);
                 }
             }
             parser::Statement::Block(statements) => {
