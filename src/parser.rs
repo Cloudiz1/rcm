@@ -144,7 +144,7 @@ pub enum Statement {
         t: Type,
     },
     Return {
-        value: Box<Expression>,
+        value: Option<Box<Expression>>,
     },
     FunctionDeclaration {
         name: String,
@@ -343,6 +343,7 @@ impl Parser {
         }
     }
 
+    // TODO: refactor this too
     fn parse_type(&mut self) -> Type {
         match self.current() {
             lexer::Token::LBrace => {
@@ -635,6 +636,7 @@ impl Parser {
     //     }
     // }
  
+    // TODO: The Great Refactoring (TM) on this
     fn get_implicit_array_length(&mut self, array_type: Type, rhs: Option<Box<Expression>>) -> Type {
         match array_type {
             Type::Array { t: var_t, size } => {
@@ -807,11 +809,20 @@ impl Parser {
 
     fn return_statement(&mut self) -> Statement {
         self.advance(); // consume return token
-        let expression = self.expression();
-        self.expect(lexer::Token::Semicolon, "expected semicolon after return statement.");
+
+        let mut value: Option<Box<Expression>> = None;
+        if let Some(token) = self.peek(1) { // empty return!
+            if token == lexer::Token::Semicolon {
+                self.advance();
+            }
+        } else { // non empty return
+            let expression = self.expression();
+            self.expect(lexer::Token::Semicolon, "expected semicolon after return statement.");
+            value = Some(Box::new(expression));
+        }
 
         Statement::Return {
-            value: Box::new(expression),
+            value
         }
     }
 

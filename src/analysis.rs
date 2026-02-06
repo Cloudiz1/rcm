@@ -1,10 +1,3 @@
-// TODO:
-// i want to rebuild the ast that came out of the parser
-// this ast should have types built in
-// id like to remove all Option<T>, feels dumb to have uncertainty in codegen
-// this also leads to a good time for compiler expansions/desugaring
-// id like to collect a symbol table too (mostly done, needs type inference for variables)
-
 use crate::lexer;
 use crate::parser;
 use std::collections::HashMap;
@@ -166,7 +159,8 @@ fn check_definition_single(table: &HashMap<String, Symbol>, identifier: &String)
     if let Some(_) = table.get(identifier) {
         return true;
     }
-     return false;
+
+    return false;
 }
 
 fn check_definition(tables: &Vec<HashMap<String, Symbol>>, identifier: &String) -> bool {
@@ -180,6 +174,27 @@ fn check_definition(tables: &Vec<HashMap<String, Symbol>>, identifier: &String) 
     return false;
 }
 
+fn allowed_implicit_coercion(lhs: parser::Type, rhs: parser::Type) {
+    const NUMBERS: [parser::Type; 11] = [
+        parser::Type::I8,
+        parser::Type::U8,
+        parser::Type::I16,
+        parser::Type::U16,
+        parser::Type::I32,
+        parser::Type::U32,
+        parser::Type::I64,
+        parser::Type::U64,
+        parser::Type::F16,
+        parser::Type::F32,
+        parser::Type::F64,
+    ];
+
+    if NUMBERS.contains(&lhs) && NUMBERS.contains(&rhs) {
+        return;
+    }
+
+    panic!("can not convert from type {} to type {}", lhs, rhs);
+}
 
 pub struct Analyzer {
     tables: Vec<HashMap<String, Symbol>>,
@@ -198,7 +213,7 @@ impl Analyzer {
         return None;
     }
 
-    fn get_type(&mut self, expr: parser::Expression) -> parser::Type {
+    fn get_type(&mut self, expr: &parser::Expression) -> parser::Type {
         match expr {
             parser::Expression::Null => parser::Type::Void,
             parser::Expression::Int(_) => parser::Type::I32,
@@ -219,14 +234,14 @@ impl Analyzer {
                     lexer::Token::Bang => parser::Type::Bool,
                     lexer::Token::Ampersand => parser::Type::I32,
                     lexer::Token::DotStar => {
-                        self.get_type(*member)
+                        self.get_type(member)
                     }
                     _ => panic!("unexpected operator in unary expression. found: {:?}", operator),
                 }
             }
             parser::Expression::Binary { lhs, operator, rhs } => {
-                let lhs_type = self.get_type(*lhs); 
-                let rhs_type = self.get_type(*rhs); 
+                let lhs_type = self.get_type(lhs); 
+                let rhs_type = self.get_type(rhs); 
 
                 let boolean_expr = match operator {
                     lexer::Token::DoublePipe
@@ -253,7 +268,7 @@ impl Analyzer {
                 return lhs_type;
             }
             parser::Expression::Dot { lhs, rhs } => {
-                let lhs_type = self.get_type(*lhs);
+                let lhs_type = self.get_type(lhs);
                 let parser::Type::Struct(identifier) = lhs_type.clone() else {
                     panic!("dot operator can not be applied to type {}", lhs_type);
                 };
@@ -270,15 +285,15 @@ impl Analyzer {
                     panic!("expected struct type, found type {}", lhs_type);
                 };
 
-                let Some(member) = members.get(&rhs) else {
+                let Some(member) = members.get(rhs) else {
                     panic!("struct {} does not contain member {}", typedef, rhs);
                 };
 
                 return member.get_type();
             }
             parser::Expression::Assignment { identifier, value } => {
-                let lhs_type = self.get_type(*identifier);
-                let rhs_type = self.get_type(*value);
+                let lhs_type = self.get_type(identifier);
+                let rhs_type = self.get_type(value);
 
                 if lhs_type == rhs_type {
                     return lhs_type;
@@ -291,18 +306,17 @@ impl Analyzer {
                 // }
                 unimplemented!("assignement casts");
             }
-            parser::Expression::FunctionCall { identifier, args: _ } => self.get_type(*identifier),
-            parser::Expression::ArrayAccess { identifier, index: _ } => self.get_type(*identifier),
+            parser::Expression::FunctionCall { identifier, args: _ } => self.get_type(identifier),
+            parser::Expression::ArrayAccess { identifier, index: _ } => self.get_type(identifier),
             parser::Expression::ArrayConstructor { values } => {
-                let expected_type = self.get_type(*values[0].clone());
+                let expected_type = self.get_type(&values[0]);
                 for value in values {
-                    if !variant_eq(&expected_type, &self.get_type(*value)) {
+                    if !variant_eq(&expected_type, &self.get_type(value)) {
                         panic!("all expressions in array constructor must have the same type.");
                     }
                 }
 
                 return expected_type;
-                // self.get_type(*values[0].clone());
             }
             parser::Expression::StructMember { 
                 parent, 
@@ -340,6 +354,85 @@ impl Analyzer {
 }
 
 impl Analyzer {
+    fn analyze_statement(&mut self, statement: parser::Statement, function_return: &Option<parser::Type>) {
+        match statement {
+            parser::Statement::FunctionDeclaration { 
+                name, 
+                return_type, 
+                parameters, 
+                body, 
+                public 
+            } => {
+                self.add_table();
+                for param in parameters {
+                    self.add_symbol(*param);
+                }
+
+                self.analyze_statement(*body, &Some(return_type));
+                self.remove_table();
+            }
+            parser::Statement::Return { value } => {
+                let return_type = match value { // get type on rhs
+                    None => parser::Type::Void,
+                    Some(v) => self.get_type(&v),
+                };
+                
+                let Some(expected_return) = function_return else {
+                    panic!("unexpected return");
+                };
+
+                if !variant_eq(&return_type, expected_return) {
+                    panic!("expected return of type {}, found type {}", expected_return, return_type); 
+                }
+            }
+            parser::Statement::Block(statements) => {
+                self.add_table();
+                for statement in statements {
+                    self.analyze_statement(*statement, function_return);
+                }
+                self.remove_table();
+            }
+            parser::Statement::VariableDeclaration { 
+                identifier, 
+                mut variable_type, 
+                initial_value, 
+                constant, 
+                public, 
+                global 
+            } => {
+                if let Some(rhs) = initial_value.clone() {
+                    let rhs_type = self.get_type(&rhs);
+                    if let Some(var_type) = variable_type.clone() {
+                        allowed_implicit_coercion(var_type, rhs_type);
+                    } else {
+                        variable_type = Some(rhs_type);
+                    }
+                } else {
+                    let Some(_) = variable_type else {
+                        panic!("type of variable {} must be known at compile time.", identifier);
+                    };
+                }
+
+                let var = parser::Statement::VariableDeclaration { 
+                    identifier, 
+                    variable_type, 
+                    initial_value, 
+                    constant, 
+                    public, 
+                    global 
+                };
+
+                self.add_symbol(var);
+            }
+            parser::Statement::ExpressionStatement(expr) => {
+                self.get_type(&expr);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Analyzer {
     pub fn new() -> Self {
         Self {
             tables: Vec::new(),
@@ -361,7 +454,10 @@ impl Analyzer {
 
     fn add_symbol(&mut self, statement: parser::Statement) {
         let (name, symbol) = create_symbol_entry(statement);
-        check_definition(&self.tables, &name);
+        if check_definition(&self.tables, &name) {
+            panic!("cannot redefine identifier {}", name);
+        }
+
         self.get_current_table().insert(name, symbol);
     }
 
@@ -376,6 +472,10 @@ impl Analyzer {
     }
 
     pub fn analyze(&mut self, ast: Vec<parser::Statement>) {
-        self.get_globals(ast);
+        self.get_globals(ast.clone());
+
+        for statement in ast {
+            self.analyze_statement(statement, &None);
+        }
     }
 }
