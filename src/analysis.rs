@@ -1,9 +1,9 @@
 use crate::lexer;
 use crate::parser;
 use std::collections::HashMap;
+use std::os::linux::raw::stat;
 
-// TODO: make this a generic...
-fn variant_eq(a: &parser::Type, b: &parser::Type) -> bool {
+fn variant_eq<T>(a: &T, b: &T) -> bool {
     std::mem::discriminant(a) == std::mem::discriminant(b)
 }
 
@@ -93,6 +93,16 @@ fn create_symbol_entry(statement: parser::Statement) -> (String, Symbol) {
                     params 
                 }
             );
+        }
+        parser::Statement::Parameter { name, t } => {
+            return (
+                name,
+                Symbol::Variable { 
+                    public: false, 
+                    constant: false, 
+                    variable_type: t, 
+                }
+            )
         }
         parser::Statement::StructDeclaration { 
             name, 
@@ -212,20 +222,41 @@ fn does_branch_return(statement: parser::Statement) -> bool {
     }
 }
 
+fn condition_always_true(condition: parser::Expression) -> bool {
+    // there may be other cases, but right now im really only looking at infinite loops
+    match condition {
+        parser::Expression::Bool(val) => return val == true,
+        _ => false,
+    }
+}
+
+/* always param is used for infinite loops, imagine:
+ * ```
+ * let i = 0;
+ *  while true {
+ *      if i == 3 {
+ *          return;
+ *      }
+ *      i += 1;
+ *  }
+ *  ```
+ *  the inner block won't always return, but there IS a return
+ *  and infinite loops are allowed
+ */
 // do NOT call this function if return type is void
-fn does_block_always_return(block: parser::Statement) -> bool {
+fn does_block_return(block: parser::Statement, always: bool) -> bool {
     let parser::Statement::Block(statements) = block else {
         unreachable!("Analyzer::does_block_return(..) should only be called with statement parser::Statement::Block")
     };
 
     for statement in statements {
-        // TODO: if its another block, check if that one always returns!
-        
-        // if variant_eq(statement.clone(), &parser::Statement::Block(Vec::new())) {
-        //     if does_block_always_return(statement.clone()) {
-        //         return true;
-        //     }
-        // }
+        // if theres another block, see if that always returns (remember, for loops get desugared into a block!)
+        if variant_eq::<parser::Statement>(&statement.clone(), &parser::Statement::Block(Vec::new())) {
+            if does_block_return(*statement.clone(), always) {
+                return true;
+            }
+        }
+
         match *statement {
             parser::Statement::Return { .. } => return true,
             parser::Statement::IfStatement { 
@@ -233,30 +264,117 @@ fn does_block_always_return(block: parser::Statement) -> bool {
                 block, 
                 alt 
             } => {
-                // TODO:
-                // if condition is always true, just check if block returns
-                // if there is an else block, just check if both return (done)
-                // otherwise, return false (done)
+                if condition_always_true(*condition) {
+                    return does_block_return(*block, always);
+                }
+
                 if let Some(else_block) = alt {
-                    return does_block_always_return(*block) && does_block_always_return(*else_block);
+                    return does_block_return(*block, always) && does_block_return(*else_block, always);
+                }
+
+                if !always {
+                    return does_block_return(*block, always);
                 }
 
                 return false;
+                /*
+                if always {
+                    return false;
+                } else {
+                    return true;
+                }
+                */
             }
             parser::Statement::WhileStatement { 
                 condition, 
                 block 
             } => {
-                // TODO:
-                // if its always true, just check if it returns!
-                // otherwise, return false
+                if condition_always_true(*condition) {
+                    // refer to comment above func decl
+                    return does_block_return(*block, false);
+                }
+
+                if !always {
+                    return does_block_return(*block, always);
+                }
+
+                return false;
             }
-            _ => {}
+            _ => {},
         }
     }
 
     return false;
 }
+
+// fn does_block_contain_return(block: parser::Statement) -> bool {
+//     dbg!(&block);
+//     let parser::Statement::Block(statements) = block else {
+//         unreachable!("Analyzer::does_block_contain_return(..) should only be called with statement parser::Statement::Block")
+//     };
+//
+//     for statement in statements {
+//         match *statement {
+//             parser::Statement::Return { .. } => return true,
+//             _ => {}
+//         };
+//     }
+//
+//     return false;
+// }
+
+// // do NOT call this function if return type is void
+// fn does_block_always_return(block: parser::Statement) -> bool {
+//     let parser::Statement::Block(statements) = block else {
+//         unreachable!("Analyzer::does_block_always_return(..) should only be called with statement parser::Statement::Block")
+//     };
+//
+//     for statement in statements {
+//         // if theres another block, see if that always returns (remember, for loops get desugared into a block!)
+//         if variant_eq::<parser::Statement>(&statement.clone(), &parser::Statement::Block(Vec::new())) {
+//             if does_block_always_return(*statement.clone()) {
+//                 return true;
+//             }
+//         }
+//
+//         match *statement {
+//             parser::Statement::Return { .. } => return true,
+//             parser::Statement::IfStatement { 
+//                 condition, 
+//                 block, 
+//                 alt 
+//             } => {
+//                 // if condition is always true, just check if block returns (done)
+//                 // if there is an else block, just check if both return (done)
+//                 // otherwise, return false (done)
+//                 if condition_always_true(*condition) {
+//                     return does_block_always_return(*block);
+//                 }
+//
+//                 if let Some(else_block) = alt {
+//                     return does_block_always_return(*block) && does_block_always_return(*else_block);
+//                 }
+//
+//                 return false;
+//             }
+//             parser::Statement::WhileStatement { 
+//                 condition, 
+//                 block 
+//             } => {
+//                 // if its always true, just check if it returns!
+//                 // otherwise, return false
+//                 if condition_always_true(*condition) {
+//                     return does_block_contain_return(*block);
+//                 }
+//
+//                 return false;
+//             }
+//             _ => {}
+//         }
+//     }
+//
+//     return false;
+// }
 
 pub struct Analyzer {
     tables: Vec<HashMap<String, Symbol>>,
@@ -430,6 +548,15 @@ impl Analyzer {
                 for param in parameters {
                     self.add_symbol(*param);
                 }
+
+                match return_type {
+                    parser::Type::Void => {}
+                    _ => {
+                        if !does_block_return(*body.clone(), true) {
+                            panic!("expected return of type {}, found no return", return_type);
+                        }
+                    }
+                };
 
                 self.analyze_statement(*body, &Some(return_type));
                 self.remove_table();

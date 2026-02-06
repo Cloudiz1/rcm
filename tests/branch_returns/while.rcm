@@ -1,0 +1,19 @@
+// fail 
+fn bar() bool {
+	return false;
+}
+
+fn foo() i32 {
+	let i = 0;
+	while i < 3 {
+		if bar() {
+			return 3;
+		}
+
+		i += 1;
+	}
+}
+
+fn main() void {
+	foo();
+}

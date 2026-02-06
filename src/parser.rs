@@ -471,7 +471,7 @@ impl Parser {
 
         self.advance(); // consume fn token
         let mut identifier = self.primary();
-        let name = self.unwrap_identifier(identifier, "expected function name in after keyword 'fn'");
+        let name = self.unwrap_identifier(identifier, "expected function name after keyword 'fn'");
 
         self.expect(lexer::Token::LParen, "expected '(' after function name.");
 

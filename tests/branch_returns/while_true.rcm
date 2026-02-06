@@ -1,0 +1,19 @@
+// pass
+fn bar() bool {
+	return false;
+}
+
+fn foo() i32 {
+	let i = 0;
+	while true {
+		if bar() {
+			return i;
+		}
+
+		i += 1;
+	}
+}
+
+fn main() void {
+	foo();
+}
