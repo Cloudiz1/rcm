@@ -1,0 +1,12 @@
+//fail
+struct foo {
+	a: i32,
+	a: f64,
+}
+
+fn main() void {
+	let s = foo {
+		a: 3,
+		a: 3.14,
+	};
+}

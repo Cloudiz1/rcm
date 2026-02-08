@@ -1,0 +1,33 @@
+// fail
+// missing field
+struct outer {
+	a: i32,
+	b: i32,
+	bar: inner,
+
+	pub fn foo(self: *outer) i32 {
+		return self.a + self.b;
+	}
+}
+
+struct inner {
+	a: f64,
+	b: f64,
+
+	pub fn foo(self: *inner) f64 {
+		return self.a + self.b;
+	}
+}
+
+fn main() void {
+	let foo = outer {
+		a: 3,
+		b: 4,
+		bar: inner {
+			a: 1.618,
+		}
+	};
+
+	foo.foo();
+	foo.bar.foo();
+}

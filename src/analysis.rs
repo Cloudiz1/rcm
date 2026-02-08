@@ -1,5 +1,6 @@
 use crate::lexer;
 use crate::parser;
+use crate::parser::Statement;
 use std::collections::HashMap;
 
 fn variant_eq(a: &parser::Type, b: &parser::Type) -> bool {
@@ -22,7 +23,7 @@ enum Symbol {
     Struct {
         public: bool,
         members: HashMap<String, Symbol>,
-        // methods: HashMap<String, Symbol>,
+        methods: HashMap<String, Symbol>,
         typedef: String,
     },
     Member(parser::Type),
@@ -51,7 +52,7 @@ impl Type for Symbol {
             } => return_type.clone(),
             Symbol::Struct {
                 members: _,
-                // methods: _,
+                methods: _,
                 public: _,
                 typedef,
             } => parser::Type::Struct(typedef.clone()),
@@ -115,15 +116,22 @@ fn create_symbol_entry(statement: parser::Statement) -> (String, Symbol) {
         } => {
             let mut symbol_members: HashMap<String, Symbol> = HashMap::new();
             for member in members {
-                let (name, symbol) = create_symbol_entry(*member);
-                check_definition_single(&symbol_members, &name);
-                symbol_members.insert(name, symbol);
+                let (member_name, symbol) = create_symbol_entry(*member);
+                if contains_defintion(&symbol_members, &member_name) {
+                    panic!("cannot redefine member {} in struct {}", member_name, name);
+                }
+                
+                symbol_members.insert(member_name, symbol);
             }
 
+            let mut symbol_methods: HashMap<String, Symbol> = HashMap::new();
             for method in methods {
-                let (name, symbol) = create_symbol_entry(*method);
-                check_definition_single(&symbol_members, &name);
-                symbol_members.insert(name, symbol);
+                let (method_name, symbol) = create_symbol_entry(*method);
+                if contains_defintion(&symbol_members, &method_name) {
+                    panic!("cannot redefine method {} in struct {}", method_name, name);
+                }
+
+                symbol_methods.insert(method_name, symbol);
             }
 
             return (
@@ -131,7 +139,7 @@ fn create_symbol_entry(statement: parser::Statement) -> (String, Symbol) {
                 Symbol::Struct { 
                     public, 
                     members: symbol_members, 
-                    // methods: symbol_methods,
+                    methods: symbol_methods,
                     typedef: name,
                 }
             )
@@ -169,7 +177,7 @@ fn create_symbol_entry(statement: parser::Statement) -> (String, Symbol) {
     }
 }
 
-fn check_definition_single(table: &HashMap<String, Symbol>, identifier: &String) -> bool {
+fn contains_defintion(table: &HashMap<String, Symbol>, identifier: &String) -> bool {
     if let Some(_) = table.get(identifier) {
         return true;
     }
@@ -180,7 +188,7 @@ fn check_definition_single(table: &HashMap<String, Symbol>, identifier: &String)
 fn check_definition(tables: &Vec<HashMap<String, Symbol>>, identifier: &String) -> bool {
     let len = tables.len();
     for i in (0..len).rev() {
-        if check_definition_single(&tables[i], identifier) {
+        if contains_defintion(&tables[i], identifier) {
             return true;
         }
     }
@@ -232,60 +240,54 @@ fn condition_always_true(condition: parser::Expression) -> bool {
  *  and infinite loops are allowed
  */
 // do NOT call this function if return type is void
-fn does_block_return(block: parser::Statement, always: bool) -> bool {
-    let parser::Statement::Block(statements) = block else {
-        unreachable!("Analyzer::does_block_return(..) should only be called with statement parser::Statement::Block")
-    };
-
-    for statement in statements {
-        // if theres another block, see if that always returns (remember, for loops get desugared into a block!)
-        if let parser::Statement::Block(_) = *statement.clone() {
-            if does_block_return(*statement.clone(), always) {
-                return true;
+fn check_branch_return(block: parser::Statement, always: bool) -> bool {
+    match block {
+        parser::Statement::Return { .. } => return true,
+        parser::Statement::Block(statements) => {
+            for statement in statements {
+                if check_branch_return(*statement, always) {
+                    return true;
+                }
             }
+            
+            return false;
         }
-
-        match *statement {
-            parser::Statement::Return { .. } => return true,
-            parser::Statement::IfStatement { 
-                condition, 
-                block, 
-                alt 
-            } => {
-                if condition_always_true(*condition) {
-                    return does_block_return(*block, always);
-                }
-
-                if let Some(else_block) = alt {
-                    return does_block_return(*block, always) && does_block_return(*else_block, always);
-                }
-
-                if !always {
-                    return does_block_return(*block, always);
-                }
-
-                return false;
+        parser::Statement::IfStatement { 
+            condition, 
+            block, 
+            alt 
+        } => {
+            if condition_always_true(*condition) {
+                return check_branch_return(*block, always);
             }
-            parser::Statement::WhileStatement { 
-                condition, 
-                block 
-            } => {
-                if condition_always_true(*condition) {
-                    // refer to comment above func decl
-                    return does_block_return(*block, false);
-                }
 
-                if !always {
-                    return does_block_return(*block, always);
-                }
-
-                return false;
+            if let Some(else_block) = alt {
+                return check_branch_return(*block, always) && check_branch_return(*else_block, always);
             }
-            _ => {},
+
+            if !always {
+                return check_branch_return(*block, always);
+            }
+
+            return false;
         }
+        parser::Statement::WhileStatement { 
+            condition, 
+            block 
+        } => {
+            if condition_always_true(*condition) {
+                // refer to comment above func decl
+                return check_branch_return(*block, false);
+            }
+
+            if !always {
+                return check_branch_return(*block, always);
+            }
+
+            return false;
+        }
+        _ => return false,
     }
-
-    return false;
 }
 
 pub struct Analyzer {
@@ -314,18 +316,23 @@ impl Analyzer {
         // };
 
         let Symbol::Struct { 
-            members, 
+            public,
+            members,
+            methods,
             typedef,
-            ..
         } = lhs_symbol else {
             panic!("expected struct type, found type {}", lhs_type);
         };
 
-        let Some(member) = members.get(rhs) else {
-            panic!("struct {} does not contain member {}", typedef, rhs);
+        if let Some(member) = members.get(rhs) {
+            return member.clone();
+        }
+
+        if let Some(method) = methods.get(rhs) {
+            return method.clone();
         };
 
-        return member.clone();
+        panic!("struct {} does not contain member {}", typedef, rhs);
     }
 
     fn get_symbol(&self, identifier: &String, msg: &str) -> Symbol {
@@ -460,34 +467,6 @@ impl Analyzer {
 
                 return expected_type;
             }
-            // parser::Expression::StructMember { 
-            //     parent, 
-            //     identifier, 
-            //     val 
-            // } => {
-            //     return parser::Type::Void;
-            // }
-            // TODO: lookup
-            // parser::Expression::StructMember { 
-            //     parent,
-            //     identifier, 
-            //     val 
-            // } => {
-            //     let parent_struct = self.get_symbol(parent);
-            //     match parent_struct {
-            //         Symbol::Struct { 
-            //             members, 
-            //             public 
-            //         } => {
-            //             let Some(child) = members.get(&identifier) else {
-            //                 panic!();
-            //             };
-            //
-            //             return child.get_type()
-            //         }
-            //         _ => panic!(),
-            //     }
-            // }
             parser::Expression::StructConstructor { 
                 identifier, 
                 members 
@@ -496,10 +475,26 @@ impl Analyzer {
                 let Symbol::Struct { 
                     public, 
                     members: defined_members, 
+                    methods,
                     typedef 
                 } = symbol.clone() else {
                     panic!("expected struct"); 
                 };
+
+                // if the lengths are different, see which one(s) are missing
+                if members.len() != defined_members.len() {
+                    let constructed_members = members
+                        .iter()
+                        .map(|x| x.clone().identifier)
+                        .collect::<Vec<String>>();
+
+                    for member in defined_members.keys() {
+                        if !constructed_members.contains(member) {
+                            // TODO: collect all the missing ones and make one big error
+                            panic!("missing member constructor: {}", member);
+                        }
+                    }
+                }
 
                 for member in members {
                     let Some(defined_member_symbol) = defined_members.get(&member.identifier) else {
@@ -537,7 +532,7 @@ impl Analyzer {
                 match return_type {
                     parser::Type::Void => {}
                     _ => {
-                        if !does_block_return(*body.clone(), true) {
+                        if !check_branch_return(*body.clone(), true) {
                             panic!("expected return of type {}, found no return", return_type);
                         }
                     }
