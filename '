@@ -419,7 +419,7 @@ impl Analyzer {
                 identifier, 
                 args 
             } => {
-                let symbol = match *identifier.clone() {
+                let symbol = match *identifier.clone(){
                     parser::Expression::Identifier(name) => {
                         let msg = &std::format!("unrecognized function {}", name);
                         self.get_symbol(&name, msg)
@@ -438,7 +438,7 @@ impl Analyzer {
                     panic!("expected function");
                 };
 
-                for (arg, expected) in std::iter::zip(args.clone(), params) {
+                for (arg, expected) in std::iter::zip(*args, params) {
                     let arg_type = self.get_type(&arg);
                     if arg_type != expected {
                         panic!("expected argument of type {}, found type {}", expected, arg_type);

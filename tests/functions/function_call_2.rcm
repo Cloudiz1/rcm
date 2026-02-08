@@ -1,0 +1,9 @@
+// fail 
+fn foo(a: i32, b: i32) i32 {
+	return a + b;
+}
+
+fn main() void {
+	let b: i16 = 3;
+	foo(1, b);
+}

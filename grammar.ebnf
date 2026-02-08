@@ -12,9 +12,9 @@ stmt = exprStmt
 	| forStmt
 	| block ;
 
-varDeclaration = ("let" | "const") identifier (":" type | [":" type] "=" expr) ";" ;
+varDeclaration = ("let" | "const") identifier [":" type] ["=" expr ] ";" ;
 functionDeclaration = ["pub"] "fn" identifier "(" { identifier ":" type "," } [identifier ":" type] ")" type block ;
-enumDeclaration = ["pub"] "enum" identifier "{" {identifier ","} [identifier [","]] "}" ;
+enumDeclaration = ["pub"] "enum" identifier "{" {identifier ","} [identifier [","] "}" ;
 
 structDeclaration = ["pub"] struct" identifier "{"
 	{ ["pub"] identifier ":" type "," }
