@@ -73,6 +73,12 @@ pub struct Parser {
 }
 
 #[derive(Debug, Clone)]
+pub struct Member {
+    pub identifier: String,
+    pub val: Expression,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expression {
     // expressions
     Null,
@@ -110,15 +116,19 @@ pub enum Expression {
     ArrayConstructor {
         values: Vec<Box<Expression>>,
     },
-    StructMember {
-        parent: String,
-        identifier: String,
-        val: Box<Expression>,
-    },
+    // StructMember {
+    //     parent: String,
+    //     identifier: String,
+    //     val: Box<Expression>,
+    // },
     StructConstructor {
         identifier: String,
-        members: Vec<Box<Expression>>, // struct members
+        members: Vec<Member>,
     },
+    // StructConstructor {
+    //     identifier: String,
+    //     members: Vec<Box<Expression>>, // struct members
+    // },
 }
 
 #[derive(Debug, Clone)]
@@ -1023,7 +1033,8 @@ impl Parser {
                     }
                 }
 
-                let mut members: Vec<Box<Expression>> = Vec::new();
+                // let mut members: Vec<Box<Expression>> = Vec::new();
+                let mut members: Vec<Member> = Vec::new();
                 let mut comma: bool = true;
 
                 if self.current() == lexer::Token::LCurly {
@@ -1044,7 +1055,8 @@ impl Parser {
 
                         self.expect(lexer::Token::Colon, "expected colon in struct constructor");
 
-                        let val = Box::new(self.expression());
+                        let val = self.expression();
+                        // let val = Box::new(self.expression());
 
                         comma = false;
                         if self.current() == lexer::Token::Comma {
@@ -1052,11 +1064,16 @@ impl Parser {
                             comma = true;
                         }
 
-                        members.push(Box::new(Expression::StructMember {
-                            parent: identifier.clone(),
+                        members.push(Member {
                             identifier: member_name,
-                            val,
-                        }));
+                            val
+                        })
+
+                        // members.push(Box::new(Expression::StructMember {
+                        //     parent: identifier.clone(),
+                        //     identifier: member_name,
+                        //     val,
+                        // }));
                     }
                     self.advance(); // consume RParen
 

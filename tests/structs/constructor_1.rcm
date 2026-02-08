@@ -1,0 +1,18 @@
+// pass
+struct foo {
+	a: i32, 
+	b: i32,
+
+	pub fn add(self: *foo) i32 {
+		return self.a + self.b;
+	}
+}
+
+fn main() void {
+	let bar = foo {
+		a: 3,
+		b: 4,
+	};
+
+	bar.add();
+}

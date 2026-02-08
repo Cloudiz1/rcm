@@ -55,7 +55,11 @@ impl Type for Symbol {
                 public: _,
                 typedef,
             } => parser::Type::Struct(typedef.clone()),
-            _ => panic!("can not get type."),
+            Symbol::Member(t) => return t.clone(),
+            // _ => {
+            //     dbg!(self);
+            //     panic!("can not get type");
+            // }
             // Symbol::Enum {
             //     varients: _,
             //     public: _,
@@ -345,17 +349,15 @@ impl Analyzer {
             parser::Expression::Bool(_) => parser::Type::Bool,
             parser::Expression::Identifier(val) => {
                 return self.get_symbol(&val, "unrecognized identifier").get_type();
-                // if let Some(symbol) = self.get_symbol(&val) {
-                //     return symbol.get_type();
-                // }
-                //
-                // panic!("unrecognized identifier");
             }
             parser::Expression::Unary { operator, member } => {
                 match operator {
                     lexer::Token::Tilde => parser::Type::I32,
                     lexer::Token::Bang => parser::Type::Bool,
-                    lexer::Token::Ampersand => parser::Type::I32,
+                    lexer::Token::Ampersand => {
+                        let inner_type = self.get_type(member);
+                        return parser::Type::Pointer(Box::new(inner_type));
+                    }
                     lexer::Token::DotStar => {
                         self.get_type(member)
                     }
@@ -458,13 +460,13 @@ impl Analyzer {
 
                 return expected_type;
             }
-            parser::Expression::StructMember { 
-                parent, 
-                identifier, 
-                val 
-            } => {
-                return parser::Type::Void;
-            }
+            // parser::Expression::StructMember { 
+            //     parent, 
+            //     identifier, 
+            //     val 
+            // } => {
+            //     return parser::Type::Void;
+            // }
             // TODO: lookup
             // parser::Expression::StructMember { 
             //     parent,
@@ -486,8 +488,32 @@ impl Analyzer {
             //         _ => panic!(),
             //     }
             // }
-            parser::Expression::StructConstructor { identifier, members } => {
-                todo!();
+            parser::Expression::StructConstructor { 
+                identifier, 
+                members 
+            } => {
+                let symbol = self.get_symbol(identifier, "unrecognized struct");
+                let Symbol::Struct { 
+                    public, 
+                    members: defined_members, 
+                    typedef 
+                } = symbol.clone() else {
+                    panic!("expected struct"); 
+                };
+
+                for member in members {
+                    let Some(defined_member_symbol) = defined_members.get(&member.identifier) else {
+                        panic!("unrecognized struct member");
+                    };
+
+                    let expected_type = defined_member_symbol.get_type();
+                    let found_type = self.get_type(&member.val);
+                    if expected_type != found_type {
+                        panic!("expected type {}, found type {}", expected_type, found_type);
+                    }
+                } 
+
+                return symbol.get_type();
             }
         }
     }
