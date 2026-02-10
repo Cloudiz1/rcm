@@ -1,3 +1,4 @@
+// pass
 fn main() void {
 	let a: [1 + 2 * 3]i32;
 	let b: [_]i32 = [1, 2, 3];

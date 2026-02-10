@@ -1,6 +1,5 @@
 use crate::lexer;
 use crate::parser;
-use crate::parser::Statement;
 use std::collections::HashMap;
 
 fn variant_eq(a: &parser::Type, b: &parser::Type) -> bool {
@@ -159,9 +158,8 @@ fn create_symbol_entry(statement: parser::Statement) -> (String, Symbol) {
             public, 
             global 
         } => {
-            let t = match variable_type {
-                Some(v) => v,
-                None => parser::Type::Void, // TODO: type inference!
+            let Some(t) = variable_type else {
+                unreachable!("all types should be known before calling create_symbol_entry()");
             };
 
             return (
@@ -197,6 +195,10 @@ fn check_definition(tables: &Vec<HashMap<String, Symbol>>, identifier: &String) 
 }
 
 fn allowed_implicit_coercion(lhs: parser::Type, rhs: parser::Type) {
+    if lhs == rhs {
+        return
+    }
+
     const NUMBERS: [parser::Type; 11] = [
         parser::Type::I8,
         parser::Type::U8,
@@ -388,8 +390,6 @@ impl Analyzer {
                 };
 
                 if boolean_expr {
-                    // TODO: all equality operations, however, must be between ints
-                    // TODO: maybe let null be an int?
                     return parser::Type::Bool;
                 }
                 
@@ -401,12 +401,6 @@ impl Analyzer {
             }
             expr @ parser::Expression::Dot { .. } => {
                 return self.get_symbol_dot(expr).get_type();
-                // if let Some(member) = self.get_symbol_dot(expr) {
-                //     return member.get_type();
-                // }
-                //
-                // // error...
-                // return parser::Type::Void;
             }
             parser::Expression::Assignment { identifier, value } => {
                 let lhs_type = self.get_type(identifier);
@@ -416,13 +410,7 @@ impl Analyzer {
                     return lhs_type;
                 }
 
-                // TODO: type assignment should be stricter, assignment type should overwrite
-                // i feel like i can do this in codegen actually
-                
-                // match lhs_type {
-                //     parser::Type::
-                // }
-                unimplemented!("assignement casts");
+                panic!("can not assign type {} to type {}", rhs_type, lhs_type);
             }
             parser::Expression::FunctionCall { 
                 identifier, 
@@ -456,7 +444,19 @@ impl Analyzer {
 
                 return return_type;
             }
-            parser::Expression::ArrayAccess { identifier, index: _ } => self.get_type(identifier),
+            parser::Expression::ArrayAccess { 
+                identifier, 
+                index: _ 
+            } => {
+                let parser::Type::Array { 
+                    t, 
+                    size: _ 
+                } = self.get_type(identifier) else {
+                    panic!("type {} can not be indexed", self.get_type(identifier));
+                };
+
+                return *t;
+            }
             parser::Expression::ArrayConstructor { values } => {
                 let expected_type = self.get_type(&values[0]);
                 for value in values {
@@ -465,7 +465,10 @@ impl Analyzer {
                     }
                 }
 
-                return expected_type;
+                return parser::Type::Array { 
+                    t: Box::new(expected_type), 
+                    size: Some(values.len()) 
+                };
             }
             parser::Expression::StructConstructor { 
                 identifier, 
@@ -651,11 +654,13 @@ impl Analyzer {
     fn get_globals(&mut self, ast: Vec<parser::Statement>) {
         self.add_table();
         for statement in ast {
-            self.add_symbol(statement);
-            // add_symbol(&mut self.tables, statement);
+            match statement {
+                // i dont actually have a good way of differentiating globals from not, so to
+                // prevent erroneous ODR violations in the second scan, we ignore globals here
+                parser::Statement::VariableDeclaration { .. } => continue,
+                _ => self.add_symbol(statement)
+            }
         }
-
-        // dbg!(&self.tables);
     }
 
     pub fn analyze(&mut self, ast: Vec<parser::Statement>) {

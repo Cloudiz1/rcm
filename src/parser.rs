@@ -327,7 +327,6 @@ impl Parser {
     }
 
     fn parse_array_expr(&mut self, expr: Expression) -> i64 {
-        // dbg!(&expr);
         match expr {
             Expression::Int(val) => return val,
             Expression::Binary { lhs, operator, rhs } => {
@@ -353,7 +352,6 @@ impl Parser {
         }
     }
 
-    // TODO: refactor this too
     fn parse_type(&mut self) -> Type {
         match self.current() {
             lexer::Token::LBrace => {
@@ -396,10 +394,6 @@ impl Parser {
             }
         }
     }
-
-    // fn print(&self) {
-    //     println!("{:?}", self.current());
-    // }
 }
 
 impl Parser {
@@ -698,16 +692,25 @@ impl Parser {
                     return Type::Void;
                 };
 
-                match *expr {
-                    Expression::ArrayConstructor { values } => {
-                        // length of rhs is lenght of array
-                        return Type::Array { t: Box::new(output_type), size: Some(values.len()) }
-                    }
-                    _ => {
-                        self.error("unexpected token.");
-                        return Type::Void;
-                    }
-                }
+                let Expression::ArrayConstructor { values } = *expr else {
+                    self.error("unexpected token.");
+                    return Type::Void;
+                };
+
+                return Type::Array { 
+                    t: Box::new(output_type), 
+                    size: Some(values.len()) 
+                };
+                // match *expr {
+                //     Expression::ArrayConstructor { values } => {
+                //         // length of rhs is length of array
+                //         return Type::Array { t: Box::new(output_type), size: Some(values.len()) }
+                //     }
+                //     _ => {
+                //         self.error("unexpected token.");
+                //         return Type::Void;
+                //     }
+                // }
             }
             _ => array_type, 
         }
@@ -716,7 +719,7 @@ impl Parser {
     fn variable_declaration(&mut self, global: bool) -> Statement {
         let public = self.is_public();
 
-        if global && public {
+        if !global && public {
             self.error("Only top level variable declarations can be public.");
         }
 

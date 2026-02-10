@@ -1,9 +1,6 @@
-pub fn main() void {
-	let a = 2;
-	if a == 3 {
-		return;
-	} else {
-		return 3;
+fn main() void {
+	let a = 3;
+	if a < 3 {
+		return 3;		
 	}
 }
-

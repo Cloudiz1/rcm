@@ -1,0 +1,10 @@
+// probably rewrite this one, was testing smth
+const a = 3.14;
+
+fn foo(i: f64) f64 {
+	return i * 2.0;
+}
+
+fn main() void {
+	foo(a);
+}
