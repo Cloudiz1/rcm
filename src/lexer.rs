@@ -237,27 +237,6 @@ impl Tokenizer {
         }
     }
 
-    fn skip_comment(&mut self) {
-        let Some(c) = self.current() else {
-            return;
-        };
-
-        let Some(n) = self.peek() else {
-            return;
-        };
-
-        if c != '/' || n != '/' {
-            return
-        }
-
-        while let Some(c) = self.current() {
-            self.advance();
-            if c == '\n' {
-                return;
-            }
-        }
-    }
-
     fn get_escaped_char(&mut self) -> char {
         if let Some(c) = self.current() {
             match c {

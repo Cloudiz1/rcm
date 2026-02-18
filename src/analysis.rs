@@ -259,7 +259,7 @@ fn check_branch_return(block: parser::Statement, always: bool) -> bool {
             block, 
             alt 
         } => {
-            if condition_always_true(*condition) {
+            if condition_always_true(condition) {
                 return check_branch_return(*block, always);
             }
 
@@ -277,7 +277,7 @@ fn check_branch_return(block: parser::Statement, always: bool) -> bool {
             condition, 
             block 
         } => {
-            if condition_always_true(*condition) {
+            if condition_always_true(condition) {
                 // refer to comment above func decl
                 return check_branch_return(*block, false);
             }
@@ -313,9 +313,6 @@ impl Analyzer {
 
         let msg: &str = &std::format!("{} is not defined", &identifier);
         let lhs_symbol = self.get_symbol(&identifier, msg);
-        // let Some(lhs_symbol) = self.get_symbol(&identifier) else {
-        //     panic!("{} is not defined", identifier);
-        // };
 
         let Symbol::Struct { 
             public,

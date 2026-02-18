@@ -116,19 +116,10 @@ pub enum Expression {
     ArrayConstructor {
         values: Vec<Box<Expression>>,
     },
-    // StructMember {
-    //     parent: String,
-    //     identifier: String,
-    //     val: Box<Expression>,
-    // },
     StructConstructor {
         identifier: String,
         members: Vec<Member>,
     },
-    // StructConstructor {
-    //     identifier: String,
-    //     members: Vec<Box<Expression>>, // struct members
-    // },
 }
 
 #[derive(Debug, Clone)]
@@ -139,7 +130,7 @@ pub enum Statement {
     VariableDeclaration {
         identifier: String,
         variable_type: Option<Type>,
-        initial_value: Option<Box<Expression>>,
+        initial_value: Option<Expression>,
         constant: bool,
         public: bool,
         global: bool,
@@ -154,7 +145,7 @@ pub enum Statement {
         t: Type,
     },
     Return {
-        value: Option<Box<Expression>>,
+        value: Option<Expression>,
     },
     FunctionDeclaration {
         name: String,
@@ -175,12 +166,12 @@ pub enum Statement {
         public: bool,
     },
     IfStatement {
-        condition: Box<Expression>,
+        condition: Expression,
         block: Box<Statement>,
         alt: Option<Box<Statement>>,
     },
     WhileStatement {
-        condition: Box<Expression>,
+        condition: Expression,
         block: Box<Statement>,
     },
 }
@@ -380,11 +371,12 @@ impl Parser {
                 self.advance(); // consumes the star
                 Type::Pointer(Box::new(self.parse_type()))
             }
-            lexer::Token::Identifier(identifier) => {
+            lexer::Token::Identifier(identifier) => { // TODO: hey tihs doesnt work actually
                 self.advance();
                 if let Some(t) = self.types.get(&identifier) {
                     return t.clone();
                 } else {
+                    // TODO: this isnt going to always be a struct dumbass!
                     return Type::Struct(identifier);
                 }
             }
@@ -641,7 +633,7 @@ impl Parser {
     // }
  
     // TODO: The Great Refactoring (TM) on this
-    fn get_implicit_array_length(&mut self, array_type: Type, rhs: Option<Box<Expression>>) -> Type {
+    fn get_implicit_array_length(&mut self, array_type: Type, rhs: Option<Expression>) -> Type {
         match array_type {
             Type::Array { t: var_t, size } => {
                 // If we know the size, no guessing needed, return
@@ -666,10 +658,10 @@ impl Parser {
                             };
 
                             // recursive only if you find another array constructor
-                            match *expr {
+                            match expr {
                                 Expression::ArrayConstructor { values } => {
                                     // get the children of both sides
-                                    Some(self.get_implicit_array_length(*var_t.clone(), Some(Box::new(*values[0].clone()))))
+                                    Some(self.get_implicit_array_length(*var_t.clone(), Some(*values[0].clone())))
                                 }
                                 _ => {
                                     self.error("unexpected token.");
@@ -692,7 +684,7 @@ impl Parser {
                     return Type::Void;
                 };
 
-                let Expression::ArrayConstructor { values } = *expr else {
+                let Expression::ArrayConstructor { values } = expr else {
                     self.error("unexpected token.");
                     return Type::Void;
                 };
@@ -725,7 +717,7 @@ impl Parser {
 
         let mut constant = false;
         let mut variable_type: Option<Type> = None;
-        let mut initial_value: Option<Box<Expression>> = None;
+        let mut initial_value: Option<Expression> = None;
         if self.consume() == lexer::Token::Const {
             constant = true;
         }
@@ -743,7 +735,7 @@ impl Parser {
         }
 
         if self.match_advance(&[lexer::Token::Equal]) {
-            initial_value = Some(Box::new(self.expression()));
+            initial_value = Some(self.expression());
         }
 
         if let Some(t) = variable_type {
@@ -793,7 +785,7 @@ impl Parser {
         let condition = self.expression();
         let block = self.block();
         Statement::WhileStatement {
-            condition: Box::new(condition),
+            condition: condition,
             block: Box::new(block),
         }
     }
@@ -814,7 +806,7 @@ impl Parser {
         }
 
         Statement::IfStatement {
-            condition: Box::new(condition),
+            condition: condition,
             block: Box::new(block),
             alt,
         }
@@ -823,13 +815,13 @@ impl Parser {
     fn return_statement(&mut self) -> Statement {
         self.advance(); // consume return token
 
-        let mut value: Option<Box<Expression>> = None;
+        let mut value: Option<Expression> = None;
         if self.current() == lexer::Token::Semicolon {
             self.advance();
         } else { // non empty return
             let expression = self.expression();
             self.expect(lexer::Token::Semicolon, "expected semicolon after return statement.");
-            value = Some(Box::new(expression));
+            value = Some(expression);
         }
 
         Statement::Return {
