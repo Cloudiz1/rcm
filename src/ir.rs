@@ -1,11 +1,13 @@
 use crate::lexer;
 use crate::parser;
+use std::borrow::BorrowMut;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::cell::RefCell;
 use std::vec::Vec;
 
 struct SSAGen {
-    current_definition: HashMap<String, Expression>
+    // current_definition: HashMap<String, Expression>
 }
 
 #[derive(Clone)]
@@ -33,23 +35,41 @@ enum Expression {
     Identifier(Identifier)
 }
 
+#[derive(Clone)]
 struct SSADeclaration {
     lhs: Identifier,
     rhs: Expression,
 }
 
+#[derive(Clone)]
 struct Block {
-    predecessors: Vec<Rc<Block>>,
+    predecessors: Vec<Rc<RefCell<Block>>>,
     instructions: Vec<SSADeclaration>,
     definitions: HashMap<String, Expression>,
+    incomplete_phis: Vec<String>,
     sealed: bool,
 }
 
-fn read_variable_recursive(variable: Identifier, block: Block) -> Expression {
+fn write_variable(variable: Identifier, block: &mut Block, value: Expression) {
+    block.definitions.insert(variable.name, value);
+}
+
+fn read_variable_recursive(variable: Identifier, block: &mut Block) -> Expression {
+    let val;
+    if !block.sealed {
+        val = Expression::Phi { operands: Vec::new() };
+        write_variable(variable.clone(), block, val);
+        block.incomplete_phis.push(variable.name.clone());
+    } else if block.predecessors.len() == 1 {
+        // let mut predecessor_rc = Rc::clone(&block.predecessors[0]);
+        let predecessor = block.predecessors[0].borrow();
+        read_variable(variable, predecessor);
+        // val = read_variable(variable, &mut predecessor);
+    }
     return Expression::Int(0);
 }
 
-fn read_variable(variable: Identifier, block: Block) -> Expression {
+fn read_variable(variable: Identifier, block: &mut Block) -> Expression {
     if let Some(current) = block.definitions.get(&variable.name) {
         return current.clone();
     }
@@ -60,7 +80,6 @@ fn read_variable(variable: Identifier, block: Block) -> Expression {
 pub fn generate_basic_block(block: parser::Statement) {
     match block {
         parser::Statement::Block(statements) => {
-
             // not *entirely* sure what to do yet
         }
         parser::Statement::WhileStatement { 
