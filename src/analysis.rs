@@ -80,12 +80,11 @@ fn create_symbol_entry(statement: parser::Statement) -> (String, Symbol) {
         } => {
             let mut params: Vec<parser::Type> = Vec::new();
             for param in parameters {
-                match *param {
-                    parser::Statement::Parameter { name, t } => {
-                        params.push(t);
-                    }
-                    _ => unreachable!(),
-                }
+                let parser::Statement::Parameter { name: _, t } = *param else {
+                    unreachable!();
+                };
+
+                params.push(t);
             }
 
             return (
@@ -294,6 +293,7 @@ fn check_branch_return(block: parser::Statement, always: bool) -> bool {
 
 pub struct Analyzer {
     tables: Vec<HashMap<String, Symbol>>,
+    // sizes: HashMap<parser::Type, usize>,
 }
 
 // Types
@@ -621,8 +621,25 @@ impl Analyzer {
 
 impl Analyzer {
     pub fn new() -> Self {
+        // let mut sizes: HashMap<parser::Type, usize> = HashMap::new();
+        // sizes.insert(parser::Type::I8, 1);
+        // sizes.insert(parser::Type::U8, 1);
+        // sizes.insert(parser::Type::I16, 2);
+        // sizes.insert(parser::Type::U16, 2);
+        // sizes.insert(parser::Type::I32, 4);
+        // sizes.insert(parser::Type::U32, 4);
+        // sizes.insert(parser::Type::I64, 8);
+        // sizes.insert(parser::Type::U64, 8);
+        // sizes.insert(parser::Type::F16, 2);
+        // sizes.insert(parser::Type::F32, 4);
+        // sizes.insert(parser::Type::F64, 8);
+        // sizes.insert(parser::Type::Bool, 1);
+        // sizes.insert(parser::Type::Char, 4);
+        // sizes.insert(parser::Type::Pointer(), 4);
+
         Self {
             tables: Vec::new(),
+            // sizes
         } 
     }
 

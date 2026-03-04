@@ -218,15 +218,18 @@ impl SSAGen {
                 // };
                 todo!();
             }
-        }
-    }
-
-    fn statement_SSA(statement: parser::Statement) {
-        match statement {
-            parser::Statement::ExpressionStatement(expr) => {
+            _ => {
+                unimplemented!();
             }
         }
     }
+
+    // fn statement_SSA(statement: parser::Statement) {
+    //     match statement {
+    //         parser::Statement::ExpressionStatement(expr) => {
+    //         }
+    //     }
+    // }
 } 
 
 

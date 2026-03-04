@@ -1,0 +1,5 @@
+// fail (expect two errors)
+fn main() void {
+	let a: [1.3 + 1.7] = 3
+	let b = 1 + 3
+}

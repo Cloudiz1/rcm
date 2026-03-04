@@ -3,7 +3,9 @@ use crate::util;
 use std::collections::HashMap;
 use std::vec::Vec;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+// TODO: error sync does not work
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     Pointer(Box<Type>),
     Array {
@@ -11,10 +13,6 @@ pub enum Type {
         size: Option<usize>, // this will always be known when passed to TAC
     },
     Struct(String),
-    // Struct {
-    //     members: HashMap<String, Type>,
-    //     methods: HashMap<String, Type>,
-    // },
     I8,
     U8,
     I16,
@@ -66,7 +64,6 @@ pub struct Parser {
     i: usize,
     types: HashMap<String, Type>,
     panic: bool,
-    // out: Vec<Statement>,
     lines: Vec<String>,
     src_path: String,
     errored: bool,
@@ -106,7 +103,7 @@ pub enum Expression {
         value: Box<Expression>,
     },
     FunctionCall {
-        identifier: Box<Expression>, // in case i want function pointers (foo())()
+        identifier: Box<Expression>,
         args: Vec<Box<Expression>>,
     },
     ArrayAccess {
@@ -395,17 +392,14 @@ impl Parser {
         }
 
         let token = self.get_debug_token();
-
-        // dbg!(token.token_type, token.column + 1);
-        if !self.panic {
-            util::print_error(token, &self.lines, &self.src_path, msg);
-        }
+        util::print_error(token, &self.lines, &self.src_path, msg);
 
         self.panic = true;
         self.errored = true;
     }
 
     fn synchronize(&mut self) {
+        dbg!(self.current());
         while !self.at_end() {
             match self.current() {
                 lexer::Token::Semicolon => {
@@ -441,7 +435,7 @@ impl Parser {
             self.advance();
         }
 
-        let out = match self.current() {
+        return match self.current() {
             lexer::Token::Fn => self.function_declaration(),
             lexer::Token::Struct => self.struct_declaration(),
             // lexer::Token::Enum => self.enum_declaration(),
@@ -452,13 +446,6 @@ impl Parser {
                 // vec![Statement::ParseError]
             }
         };
-
-        if self.panic {
-            self.synchronize();
-            self.panic = false;
-        }
-
-        return out;
     }
 
     // fn function_declaration(&mut self, struct_name: Option<String>) -> Statement {
@@ -498,7 +485,6 @@ impl Parser {
         }
 
         self.expect(lexer::Token::RParen, "expected ')'");
-
         let return_type = self.parse_type();
 
         // if let Some(n) = struct_name {
@@ -755,14 +741,17 @@ impl Parser {
     }
 
     fn statement(&mut self) -> Statement {
-        match self.current() {
+        let out = match self.current() {
             lexer::Token::LCurly => self.block(),
             lexer::Token::Let | lexer::Token::Const => self.variable_declaration(false),
             lexer::Token::While => self.while_statement(),
             lexer::Token::If => self.if_statement(),
             lexer::Token::Return => self.return_statement(),
             _ => self.expression_statement(),
-        }
+        };
+            
+        self.panic = false;
+        return out;
     }
 
     fn block(&mut self) -> Statement {
