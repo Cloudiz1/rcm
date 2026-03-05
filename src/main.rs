@@ -29,10 +29,10 @@ fn main() {
         return;
     };
 
-    // dbg!(&ast);
+    dbg!(&ast);
 
-    let mut analyzer = analysis::Analyzer::new();
-    analyzer.analyze(ast);
+    // let mut analyzer = analysis::Analyzer::new();
+    // analyzer.analyze(ast);
 
     // println!("{:#?}", ast);
 }

@@ -328,13 +328,13 @@ impl Parser {
                     lexer::Token::Slash => elhs / erhs,
                     lexer::Token::Percent => elhs % erhs,
                     _ => {
-                        self.error("Unallowed expression.");
+                        self.error("unallowed expression");
                         return 0;
                     }
                 }
             }
             _ => {
-                self.error("Unallowed expression.");
+                self.error("unallowed expression");
                 return 0;
             }
         }
@@ -347,22 +347,24 @@ impl Parser {
                 let mut size: Option<usize> = None;
                 if !self.match_advance(&[lexer::Token::Underscore]) {
                     let expr = self.term();
-                    let inferred_size = self.parse_array_expr(expr);
-                    if inferred_size < 1 {
+                    let array_size = self.parse_array_expr(expr);
+                    if array_size < 1 {
                         self.error("array size must be larger than 0");
                     }
 
-                    size = Some(inferred_size as usize);
+                    size = Some(array_size as usize);
                 }
 
                 if !self.expect(lexer::Token::RBrace, "expected closing brace.") {
                     return Type::Void;
                 }
 
-                Type::Array {
+                let out = Type::Array {
                     t: Box::new(self.parse_type()),
                     size,
-                }
+                };
+
+                return out;
             } 
             lexer::Token::Star => {
                 self.advance(); // consumes the star
@@ -399,7 +401,6 @@ impl Parser {
     }
 
     fn synchronize(&mut self) {
-        dbg!(self.current());
         while !self.at_end() {
             match self.current() {
                 lexer::Token::Semicolon => {
@@ -448,7 +449,6 @@ impl Parser {
         };
     }
 
-    // fn function_declaration(&mut self, struct_name: Option<String>) -> Statement {
     fn function_declaration(&mut self) -> Statement {
         let public = self.is_public();
 
@@ -618,87 +618,43 @@ impl Parser {
     //     }
     // }
  
-    // TODO: The Great Refactoring (TM) on this
-    fn get_implicit_array_length(&mut self, array_type: Type, rhs: Option<Expression>) -> Type {
-        match array_type {
-            Type::Array { t: var_t, size } => {
-                // If we know the size, no guessing needed, return
-                match size {
-                    Some(_) => return Type::Array {
-                        t: var_t,
-                        size
-                    },
-                    None => {}
-                }
+    fn get_implicit_array_length(&mut self, input_type: Type, rhs: Option<Expression>) -> Type {
+        let Type::Array { mut t, size } = input_type.clone() else {
+            return input_type;
+        };
 
-                let nested_array_option = match *var_t.clone() {
-                    // if there is another array, call recursively until there isnt
-                    Type::Array { t: nested_var_t, size: nested_size} => {
-                        // we know the size, no guessing needed
-                        if let Some(s) = nested_size {
-                            Some(Type::Array { t: nested_var_t, size: Some(s)})
-                        } else {
-                            let Some(expr) = rhs.clone() else {
-                                self.error("can not infer array length.");
-                                return Type::Void;
-                            };
-
-                            // recursive only if you find another array constructor
-                            match expr {
-                                Expression::ArrayConstructor { values } => {
-                                    // get the children of both sides
-                                    Some(self.get_implicit_array_length(*var_t.clone(), Some(*values[0].clone())))
-                                }
-                                _ => {
-                                    self.error("unexpected token.");
-                                    return Type::Void;
-                                }
-                            }
-                        }
-                    }
-                    _ => None,
-                };
-
-                let mut output_type = *var_t; 
-                if let Some(nested_array) = nested_array_option {
-                    output_type = nested_array;
-                }
-
-                // if we dont have a nested array type, get the length of that array
-                let Some(expr) = rhs else {
-                    self.error("can not infer array length.");
-                    return Type::Void;
-                };
-
-                let Expression::ArrayConstructor { values } = expr else {
-                    self.error("unexpected token.");
-                    return Type::Void;
-                };
-
-                return Type::Array { 
-                    t: Box::new(output_type), 
-                    size: Some(values.len()) 
-                };
-                // match *expr {
-                //     Expression::ArrayConstructor { values } => {
-                //         // length of rhs is length of array
-                //         return Type::Array { t: Box::new(output_type), size: Some(values.len()) }
-                //     }
-                //     _ => {
-                //         self.error("unexpected token.");
-                //         return Type::Void;
-                //     }
-                // }
-            }
-            _ => array_type, 
+        if !matches!(*t, Type::Array { .. }) && size.is_some() {
+            return input_type;
         }
+
+        let Some(expr) = rhs else {
+            self.error("expected rhs");
+            return Type::Void;
+        };
+
+        let Expression::ArrayConstructor { values } = expr else {
+            self.error("expected array constructor");
+            return Type::Void;
+        };
+
+        if let Type::Array { .. } = *t {
+            t = Box::new(self.get_implicit_array_length(*t, Some(*values[0].clone())));
+        }
+
+        if let Some(declared_size) = size {
+            if declared_size != values.len() {
+                self.error("declared size does not match size of array constructor");
+            }
+        }
+
+        return Type::Array { t, size: Some(values.len()) }
     }
 
     fn variable_declaration(&mut self, global: bool) -> Statement {
         let public = self.is_public();
 
         if !global && public {
-            self.error("Only top level variable declarations can be public.");
+            self.error("only top level variable declarations can be public");
         }
 
         let mut constant = false;
@@ -714,7 +670,7 @@ impl Parser {
         }
 
         let expr = self.primary();
-        let identifier = self.unwrap_identifier(expr, "expected identifier after variable declaration.");
+        let identifier = self.unwrap_identifier(expr, "expected identifier");
 
         if self.match_advance(&[lexer::Token::Colon]) {
             variable_type = Some(self.parse_type());
@@ -728,7 +684,7 @@ impl Parser {
             variable_type = Some(self.get_implicit_array_length(t, initial_value.clone()));
         }
 
-        self.expect(lexer::Token::Semicolon, "expected semicolon after variable declaration.");
+        self.expect(lexer::Token::Semicolon, "expected semicolon");
 
         return Statement::VariableDeclaration {
             identifier,
