@@ -1,7 +1,8 @@
 use crate::util;
+use core::fmt;
 use std::collections::HashMap;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub enum Token {
     // general syntax
     LParen,
@@ -25,7 +26,6 @@ pub enum Token {
     Pub,
     Struct,
     Enum,
-
     If,
     Else,
     Switch,
@@ -85,9 +85,93 @@ pub enum Token {
     EscChar(u8),
 
     // special characters
+    #[default]
     Null,
     Newline,
     Tab,
+}
+
+// this implements printing for errors, in the format "eprintln!("expected {}", token)"
+impl std::fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Token::LParen => write!(f, "'('"),
+            Token::RParen => write!(f, "')'"),
+            Token::LBrace => write!(f, "'['"),
+            Token::RBrace => write!(f, "']'"),
+            Token::LCurly => write!(f, "'{{'"),
+            Token::RCurly => write!(f, "'}}'"),
+            Token::Dot => write!(f, "'.'"),
+            Token::Comma => write!(f, "','"),
+            Token::Semicolon => write!(f, "';'"),
+            Token::Colon => write!(f, "':'"),
+            Token::Equal => write!(f, "'='"),
+            Token::DotStar => write!(f, "'.*'"),
+            Token::Underscore => write!(f, "'_'"),
+
+            Token::Let => write!(f, "keyword 'let'"),
+            Token::Const => write!(f, "keyword 'const'"),
+            Token::Fn => write!(f, "keyword 'fn'"),
+            Token::Pub => write!(f, "keyword 'pub'"),
+            Token::Struct => write!(f, "keyword 'struct'"),
+            Token::Enum => write!(f, "keyword 'enum'"),
+            Token::If => write!(f, "keyword 'if'"),
+            Token::Else => write!(f, "keyword 'else'"),
+            Token::Switch => write!(f, "keyword 'switch'"),
+            Token::Case => write!(f, "keyword 'case'"),
+            Token::While => write!(f, "keyword 'while'"),
+            Token::Do => write!(f, "keyword 'do'"),
+            Token::For => write!(f, "keyword 'for'"),
+            Token::Break => write!(f, "keyword 'break'"),
+            Token::Continue => write!(f, "keyword 'continue'"),
+            Token::Return => write!(f, "keyword 'return'"),
+
+            Token::Plus => write!(f, "''"),
+            Token::Minus => write!(f, "''"),
+            Token::Star => write!(f, "''"),
+            Token::Slash => write!(f, "''"),
+            Token::Percent => write!(f, "''"),
+
+            Token::Tilde => write!(f, "'~'"),
+            Token::Ampersand => write!(f, "'&'"),
+            Token::Pipe => write!(f, "'|'"),
+            Token::Caret => write!(f, "'^'"),
+            Token::DoubleLeftCaret => write!(f, "'<<'"),
+            Token::DoubleRightCaret => write!(f, "'>>'"),
+
+            Token::PlusEqual => write!(f, "'+='"),
+            Token::MinusEqual => write!(f, "'-='"),
+            Token::StarEqual => write!(f, "'*='"),
+            Token::SlashEqual => write!(f, "'/='"),
+            Token::PercentEqual => write!(f, "'%='"),
+
+            Token::BangEqual => write!(f, "'!='"),
+            Token::AmpersandEqual => write!(f, "'&='"),
+            Token::PipeEqual => write!(f, "'!='"),
+            Token::CaretEqual => write!(f, "'^='"),
+            Token::DoubleLeftCaretEqual => write!(f, "'<<='"),
+            Token::DoubleRightCaretEqual => write!(f, "'<<='"),
+
+            Token::Bang => write!(f, "'!'"),
+            Token::EqualEqual => write!(f, "'=='"),
+            Token::DoubleAmpersand => write!(f, "'&&'"),
+            Token::DoublePipe => write!(f, "'||'"),
+            Token::LeftCaret => write!(f, "'<'"),
+            Token::RightCaret => write!(f, "'>'"),
+            Token::LeftCaretEqual => write!(f, "'<='"),
+            Token::RightCaretEqual => write!(f, "'>='"),
+
+            Token::Char(_) => write!(f, "char"),
+            Token::StringLit(_) => write!(f, "string literal"),
+            Token::Identifier(_) => write!(f, "identifier"),
+            Token::IntLit(_) => write!(f, "integer literal"),
+            Token::FloatLit(_) => write!(f, "float literal"),
+            Token::Bool(_) => write!(f, "boolean"),
+            Token::Null => write!(f, "null"),
+
+            _ => panic!("internal error: std::fmt::Display not implemented for {}", self),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -156,7 +240,7 @@ impl Tokenizer {
     fn error(&mut self, msg: &str) {
         if !self.panic {
             let debug_token = DebugToken {
-                token_type: Token::Null,
+                token_type: Token::default(),
                 line_number: self.line_number.clone(),
                 column: self.column.clone(),
             };
@@ -393,6 +477,7 @@ impl Tokenizer {
                                         //
                         while let Some(c) = self.current() {
                             if c == '\n' {
+                                self.line_number += 1;
                                 return None;
                             }
                             
