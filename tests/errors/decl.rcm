@@ -1,0 +1,15 @@
+// should only error ONCE
+struct foo {
+	a: i32
+	b: i32
+
+	pub fn bar(self: *foo) void {
+		let a: [1.3]i32;
+	}
+}
+
+// should also only error ONCE
+fn baz(a, b: i32) void {
+	let b = 1 + 2
+}
+

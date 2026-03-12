@@ -5,7 +5,7 @@ use std::vec::Vec;
 
 // TODO: error sync does not work
 
-#[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     Pointer(Box<Type>),
     Array {
@@ -26,7 +26,6 @@ pub enum Type {
     F64,
     Bool,
 
-    #[default]
     Void,
     Str,
     Char,
@@ -218,8 +217,8 @@ impl Parser {
     }
 
     fn previous(&self) -> lexer::Token {
-        if self.i == 0 {
-            panic!("Parser.previous() called on index 0.");
+        if self.i == 0 || self.at_end() {
+            return lexer::Token::Null;
         }
 
         self.input[self.i - 1].token_type.clone()
@@ -227,34 +226,34 @@ impl Parser {
 
     fn current(&self) -> lexer::Token {
         if self.at_end() {
-            panic!("Parser.current() tried to access out of bounds index.");
+            return lexer::Token::Null;
         }
 
         self.input[self.i].token_type.clone()
     }
 
-    // can peek backwards too!
-    fn peek(&self, index: i32) -> Option<lexer::Token> {
-        let i = self.i as i32 + index - 1;
-        
-        if i >= self.input.len() as i32 || i < 0 {
-            return None;
-        }
-
-        Some(self.input[i as usize].token_type.clone())
-    }
+    // // can peek backwards too
+    // fn peek(&self, index: i32) -> Option<lexer::Token> {
+    //     let i = self.i as i32 + index - 1;
+    //
+    //     if i >= self.input.len() as i32 || i < 0 {
+    //         return None;
+    //     }
+    //
+    //     Some(self.input[i as usize].token_type.clone())
+    // }
 
     fn next(&mut self) -> lexer::Token {
         self.i += 1;
         self.previous()
     }
 
-    fn get_debug_token(&self) -> lexer::DebugToken {
-        if self.i == 0 {
-            return self.input[0].clone();
+    fn get_debug_token(&self) -> &lexer::DebugToken {
+        if self.i == 0 || self.at_end() {
+            return &self.input[0];
         }
 
-        self.input[self.i - 1].clone()
+        return &self.input[self.i - 1];
     }
 
     fn token_match(&self, tokens: &[lexer::Token]) -> bool {
@@ -287,15 +286,10 @@ impl Parser {
         }
     }
 
-    fn consume(&mut self, token: lexer::Token, msg: Option<&str>) -> Option<String> {
+    fn consume(&mut self, token: lexer::Token, msg: Option<&str>) -> Option<lexer::Token> {
         if !self.at_end() && self.current() == token {
             self.advance();
-
-            if let lexer::Token::Identifier(name) = token {
-                return Some(name);
-            }
-
-            return Some(String::new());
+            return Some(token);
         }
 
         if let Some(custom) = msg {
@@ -307,14 +301,17 @@ impl Parser {
         return None;
     }
 
-    // fn unwrap_identifier(&mut self, i: Expression, msg: &str) -> String {
-    //     if let Expression::Identifier(identifier) = i {
-    //         return identifier;
-    //     };
-    //
-    //     self.error(msg);
-    //     return "".to_owned();
-    // }
+    fn expect_identifier(&mut self, msg: &str) -> String {
+        if !self.at_end() {
+            if let lexer::Token::Identifier(name) = self.current() {
+                self.advance();
+                return name;
+            }
+        }
+
+        self.error(msg);
+        return "".to_owned();
+    }
 
     fn is_public(&mut self) -> bool {
         if self.i == 0 {
@@ -350,12 +347,14 @@ impl Parser {
         }
     }
 
-    fn parse_type(&mut self) -> Option<Type> {
+    fn parse_type(&mut self) -> Type {
         match self.current() {
             lexer::Token::LBrace => {
                 self.advance();
                 let mut size: Option<usize> = None;
-                if self.match_advance(&[lexer::Token::Underscore]).is_none() {
+                if self.current() == lexer::Token::Underscore {
+                    self.advance();
+                } else {
                     let expr = self.term();
                     let array_size = self.parse_array_expr(expr);
                     if array_size < 1 {
@@ -365,32 +364,28 @@ impl Parser {
                     size = Some(array_size as usize);
                 }
 
-                self.consume(lexer::Token::RBrace, None)?;
-                // if !self.consume(lexer::Token::RBrace, "expected closing brace.") {
-                //     return Type::Void;
-                // }
-
-                return Some( Type::Array {
-                    t: Box::new(self.parse_type()?),
+                self.consume(lexer::Token::RBrace, None);
+                return Type::Array {
+                    t: Box::new(self.parse_type()),
                     size,
-                });
+                };
             } 
             lexer::Token::Star => {
                 self.advance(); // consumes the star
-                Some(Type::Pointer(Box::new(self.parse_type()?)))
+                Type::Pointer(Box::new(self.parse_type()))
             }
             lexer::Token::Identifier(identifier) => { // TODO: hey tihs doesnt work actually
                 self.advance();
                 if let Some(t) = self.types.get(&identifier) {
-                    return Some(t.clone());
+                    return t.clone();
                 } else {
                     // TODO: this isnt going to always be a struct dumbass!
-                    return Some(Type::Struct(identifier));
+                    return Type::Struct(identifier);
                 }
             }
             _ => {
                 self.error("expected type");
-                None
+                return Type::Void;
             }
         }
     }
@@ -409,7 +404,7 @@ impl Parser {
         self.errored = true;
     }
 
-    fn synchronize(&mut self) {
+    fn synchronize_statement(&mut self) {
         while !self.at_end() {
             match self.current() {
                 lexer::Token::Semicolon => {
@@ -425,14 +420,25 @@ impl Parser {
                 | lexer::Token::Else
                 | lexer::Token::For
                 | lexer::Token::While
-                | lexer::Token::Return => {
-                // | lexer::Token::RCurly => {
+                | lexer::Token::Let
+                | lexer::Token::Const
+                | lexer::Token::Return 
+                | lexer::Token::RCurly => {
                     return;
                 }
-                _ => {}
+                _ => self.advance(),
             }
+        }
+    }
 
-            self.advance();
+    fn synchronize_declarations(&mut self) {
+        while !self.at_end() {
+            match self.current() {
+                lexer::Token::Fn
+                | lexer::Token::Struct
+                | lexer::Token::Enum => break,
+                _ => self.advance(),
+            }
         }
     }
 }
@@ -444,10 +450,11 @@ impl Parser {
             self.advance();
         }
 
-        return match self.current() {
+        let out = match self.current() {
             lexer::Token::Fn => self.function_declaration(),
             lexer::Token::Struct => self.struct_declaration(),
             // lexer::Token::Enum => self.enum_declaration(),
+            // TODO: i think i would much much rather have a static keyword instead
             lexer::Token::Let | lexer::Token::Const => self.variable_declaration(true),
             _ => {
                 self.error("unrecognized top level expression");
@@ -455,29 +462,27 @@ impl Parser {
                 // vec![Statement::ParseError]
             }
         };
+
+        if self.panic {
+            self.synchronize_declarations();
+        }
+
+        return out;
     }
 
-    fn function_declaration(&mut self) -> Option<Statement> {
+    fn function_declaration(&mut self) -> Statement {
         let public = self.is_public();
 
         self.advance(); // consume fn token
-        // let mut identifier = self.primary();
-        let name = self.consume(lexer::Token::Identifier(String::new()), None).unwrap_or_default();
+        let name = self.expect_identifier("expected function name");
         self.consume(lexer::Token::LParen, None);
 
         let mut parameters: Vec<Box<Statement>> = Vec::new();
         while self.current() != lexer::Token::RParen {
-            // identifier = self.primary();
-            // let param_name = self.unwrap_identifier(identifier,"expected parameter");
-
-            let lexer::Token::Identifier(param_name) = self.consume(
-                lexer::Token::Identifier(String::new()),
-                Some("expected parameter")
-            )? else { unreachable!() };
-
+            let param_name = self.expect_identifier("expected parameter");
             self.consume(lexer::Token::Colon, None);
 
-            let param_type = self.parse_type().unwrap_or_default();
+            let param_type = self.parse_type();
             parameters.push(Box::new(Statement::Parameter {
                 name: param_name,
                 t: param_type,
@@ -493,7 +498,7 @@ impl Parser {
             }
         }
 
-        self.consume(lexer::Token::RParen, "expected ')'");
+        self.consume(lexer::Token::RParen, None);
         let return_type = self.parse_type();
 
         let body = Box::new(self.block());
@@ -511,10 +516,9 @@ impl Parser {
         let struct_public = self.is_public();
         self.advance(); // consume struct token
 
-        let identifier = self.primary();
-        let struct_name = self.unwrap_identifier(identifier, "expected identifier");
+        let struct_name = self.expect_identifier("expected struct name");
 
-        if !self.consume(lexer::Token::LCurly, "expected body") {
+        if self.consume(lexer::Token::LCurly, None).is_none() {
             return Statement::ParseError;
         }
 
@@ -536,7 +540,7 @@ impl Parser {
 
             let public: bool = self.is_public();
             self.advance(); // consume the identifier
-            self.consume(lexer::Token::Colon, "exected ':'");
+            self.consume(lexer::Token::Colon, Some("exected ':'"));
 
             let t = self.parse_type();
 
@@ -574,7 +578,7 @@ impl Parser {
             _ => {}
         }
 
-        self.consume(lexer::Token::RCurly, "expected '}'");
+        self.consume(lexer::Token::RCurly, None);
 
         return Statement::StructDeclaration {
             name: struct_name,
@@ -673,14 +677,15 @@ impl Parser {
             return Statement::ParseError;
         }
 
-        let expr = self.primary();
-        let identifier = self.unwrap_identifier(expr, None);
+        let identifier = self.expect_identifier("expected identifier");
 
-        if self.match_advance(&[lexer::Token::Colon]).is_some() {
+        if self.current() == lexer::Token::Colon {
+            self.advance();
             variable_type = Some(self.parse_type());
         }
 
-        if self.match_advance(&[lexer::Token::Equal]).is_some() {
+        if self.current() == lexer::Token::Equal {
+            self.advance();
             initial_value = Some(self.expression());
         }
 
@@ -709,23 +714,23 @@ impl Parser {
             lexer::Token::Return => self.return_statement(),
             _ => self.expression_statement(),
         };
-            
-        self.panic = false;
+
+        if self.panic {
+            self.synchronize_statement();
+            self.panic = false;
+        }
+
         return out;
     }
 
     fn block(&mut self) -> Statement {
         let mut out: Vec<Box<Statement>> = Vec::new();
         self.advance();
-        while self.current() != lexer::Token::RCurly {
+        while self.current() != lexer::Token::RCurly && !self.at_end() {
             out.push(Box::new(self.statement()));
         }
 
-        self.consume(
-            lexer::Token::RCurly,
-            "expected closing curly brace after the end of a block.",
-        );
-
+        self.consume(lexer::Token::RCurly, None);
         Statement::Block(out)
     }
 
@@ -769,7 +774,7 @@ impl Parser {
             self.advance();
         } else { // non empty return
             let expression = self.expression();
-            self.consume(lexer::Token::Semicolon, "expected semicolon after return statement.");
+            self.consume(lexer::Token::Semicolon, None);
             value = Some(expression);
         }
 
@@ -780,7 +785,7 @@ impl Parser {
 
     fn expression_statement(&mut self) -> Statement {
         let out = Statement::ExpressionStatement(self.expression());
-        self.consume(lexer::Token::Semicolon, "expected semicolon.");
+        self.consume(lexer::Token::Semicolon, None);
         return out;
     }
 }
@@ -820,7 +825,7 @@ impl Parser {
             lexer::Token::CaretEqual,
             lexer::Token::DoubleLeftCaret,
             lexer::Token::DoubleRightCaret,
-        ]) {
+        ][..]) {
             let rhs = self.expression();
 
             if operator == lexer::Token::Equal {
@@ -843,7 +848,7 @@ impl Parser {
     fn logical_or(&mut self) -> Expression {
         let mut expr = self.logical_and();
 
-        while let Some(operator) = self.match_advance(&[lexer::Token::DoublePipe]) {
+        while let Some(operator) = self.match_advance(&[lexer::Token::DoublePipe][..]) {
             let rhs = self.logical_and();
             expr = self.create_binary(expr, operator, rhs);
         }
@@ -854,7 +859,7 @@ impl Parser {
     fn logical_and(&mut self) -> Expression {
         let mut expr = self.comparison();
 
-        while let Some(operator) = self.match_advance(&[lexer::Token::DoubleAmpersand]) {
+        while let Some(operator) = self.match_advance(&[lexer::Token::DoubleAmpersand][..]) {
             let rhs = self.comparison();
             expr = self.create_binary(expr, operator, rhs);
         }
@@ -872,7 +877,7 @@ impl Parser {
             lexer::Token::RightCaretEqual,
             lexer::Token::EqualEqual,
             lexer::Token::BangEqual,
-        ]) {
+        ][..]) {
             let rhs = self.bitwise();
             expr = self.create_binary(expr, operator, rhs);
         }
@@ -887,7 +892,7 @@ impl Parser {
             lexer::Token::Ampersand,
             lexer::Token::Pipe,
             lexer::Token::Caret,
-        ]) {
+        ][..]) {
             let rhs = self.bitshift();
             expr = self.create_binary(expr, operator, rhs);
         }
@@ -901,7 +906,7 @@ impl Parser {
         while let Some(operator) = self.match_advance(&[
             lexer::Token::DoubleLeftCaret,
             lexer::Token::DoubleRightCaret,
-        ]) {
+        ][..]) {
             let rhs = self.term();
             expr = self.create_binary(expr, operator, rhs);
         }
@@ -912,7 +917,7 @@ impl Parser {
     fn term(&mut self) -> Expression {
         let mut expr = self.factor();
 
-        while let Some(operator) = self.match_advance(&[lexer::Token::Plus, lexer::Token::Minus]) {
+        while let Some(operator) = self.match_advance(&[lexer::Token::Plus, lexer::Token::Minus][..]) {
             let rhs = self.factor();
             expr = self.create_binary(expr, operator, rhs);
         }
@@ -927,7 +932,7 @@ impl Parser {
             lexer::Token::Star,
             lexer::Token::Slash,
             lexer::Token::Percent,
-        ]) {
+        ][..]) {
             let rhs = self.unary();
             expr = self.create_binary(expr, operator, rhs);
         }
@@ -941,7 +946,7 @@ impl Parser {
             lexer::Token::Tilde,
             lexer::Token::Minus,
             lexer::Token::Ampersand,
-        ]) {
+        ][..]) {
             let rhs = self.unary();
             return self.create_unary(operator, rhs);
         }
@@ -962,10 +967,9 @@ impl Parser {
                 // while foo {
                 //      ...
                 // }
-                if let Some(token) = self.peek(-1) {
-                    if [lexer::Token::If, lexer::Token::While].contains(&token) {
-                        return expr;
-                    }
+                let token = self.previous();
+                if [lexer::Token::If, lexer::Token::While].contains(&token) {
+                    return expr;
                 }
 
                 // let mut members: Vec<Box<Expression>> = Vec::new();
@@ -982,16 +986,9 @@ impl Parser {
                             );
                         }
 
-                        let member_identifier = self.struct_constructor();
-                        let member_name = self.unwrap_identifier(
-                            member_identifier,
-                            "expected identifier in struct constructor.",
-                        );
-
+                        let member_name = self.expect_identifier("expected identifier in struct constructor");
                         self.consume(lexer::Token::Colon, None);
-
                         let val = self.expression();
-                        // let val = Box::new(self.expression());
 
                         comma = false;
                         if self.current() == lexer::Token::Comma {
@@ -1003,12 +1000,6 @@ impl Parser {
                             identifier: member_name,
                             val
                         })
-
-                        // members.push(Box::new(Expression::StructMember {
-                        //     parent: identifier.clone(),
-                        //     identifier: member_name,
-                        //     val,
-                        // }));
                     }
                     self.advance(); // consume RParen
 
@@ -1031,7 +1022,7 @@ impl Parser {
             lexer::Token::Dot,
             lexer::Token::LParen,
             lexer::Token::LBrace,
-        ]) {
+        ][..]) {
             expr = match self.current() {
                 lexer::Token::DotStar => {
                     self.advance(); // consume operator
@@ -1043,11 +1034,7 @@ impl Parser {
                 lexer::Token::Dot => {
                     self.advance();
                     // let rhs_expr = self.primary();
-                    let lexer::Token::Identifier(rhs) = self.consume(
-                        lexer::Token::Identifier(String::new()),
-                        Some("rhs of dot operator must be an identifier")
-                    ).unwrap_or_default() else { unreachable!() };
-
+                    let rhs = self.expect_identifier("rhs of dot operator must be an identifier");
                     Expression::Dot {
                         lhs: Box::new(expr),
                         rhs: rhs,

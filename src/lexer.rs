@@ -245,7 +245,7 @@ impl Tokenizer {
                 column: self.column.clone(),
             };
 
-            util::print_error(debug_token, &self.lines.clone(), &self.src_path.clone(), msg);
+            util::print_error(&debug_token, &self.lines.clone(), &self.src_path.clone(), msg);
         }
 
         self.panic = true;

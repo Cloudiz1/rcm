@@ -29,7 +29,7 @@ fn main() {
         return;
     };
 
-    dbg!(&ast);
+    // dbg!(&ast);
 
     // let mut analyzer = analysis::Analyzer::new();
     // analyzer.analyze(ast);
