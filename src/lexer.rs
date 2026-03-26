@@ -304,23 +304,6 @@ impl Tokenizer {
         return false;
     }
 
-    fn skip_whitespace(&mut self) {
-        while let Some(c) = self.current() {
-            if c == '\n' {
-                self.line_number += 1;
-                self.column = -1; // when you advance, youll actually be on the first token, and
-                                  // its supposed to be zero indexed
-            }
-
-            if !c.is_whitespace() {
-                return;
-            }
-
-            self.advance();
-            // self.column -= 1; // dont count whitespace!
-        }
-    }
-
     fn get_escaped_char(&mut self) -> char {
         if let Some(c) = self.current() {
             match c {
@@ -440,8 +423,28 @@ impl Tokenizer {
     }
 
     fn get_token(&mut self) -> Option<Token> {
-        self.skip_whitespace();
-        // self.skip_comment();
+        // ignore how shit this code is i cucked myself with Option<T> and will not be using it
+        // next time around
+        while let Some(_) = self.current() {
+            if self.current() == Some('/') && self.peek() == Some('/') {
+                while self.current() != Some('\n') {
+                    self.advance();
+                }
+            }
+
+            if self.current() == Some('\n') {
+                self.line_number += 1;
+                self.column = -1;
+            }
+
+            if let Some(c) = self.current() {
+                if !c.is_whitespace() {
+                    break;
+                }
+            }
+
+            self.advance();
+        }
 
         let Some(c) = self.current() else {
             return None;
@@ -471,20 +474,6 @@ impl Tokenizer {
             '-' => self.operation_and_assignment(Token::Minus, Token::MinusEqual),
             '*' => self.operation_and_assignment(Token::Star, Token::StarEqual),
             '/' => {
-                if let Some(n) = self.peek() {
-                    if n == '/' {
-                        self.advance(); // skips the double slash
-                                        //
-                        while let Some(c) = self.current() {
-                            if c == '\n' {
-                                self.line_number += 1;
-                                return None;
-                            }
-                            
-                            self.advance();
-                        }
-                    };
-                }
 
                 return Some(self.operation_and_assignment(Token::Slash, Token::SlashEqual));
             }

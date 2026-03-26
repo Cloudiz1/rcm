@@ -1,6 +1,5 @@
 use crate::lexer;
 
-// TODO: Comments break this :sob:
 pub fn print_error(token: &lexer::DebugToken, lines: &Vec<String>, src_path: &String, msg: &str) {
     // dbg!(&token);
     println!("at {}:{}", src_path, token.line_number + 1);
