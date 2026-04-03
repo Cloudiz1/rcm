@@ -1,258 +1,156 @@
-use crate::lexer;
 use crate::parser;
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
-use std::vec::Vec;
 
-struct SSAGen {
-    blocks: Vec<Block>,
-    t_counter: usize,
-    // current_definition: HashMap<String, Expression>
+pub type BlockId = usize;
+pub type ValueId = usize;
+
+pub struct SSA {
+    blocks: Vec<Block>, // uses BlockId
+    values: Vec<Value>, // uses ValueId
+    types: Vec<parser::Type>, // uses ValueId
+
+    // track the current id for arenas
+    curr_val_id: ValueId,
+    curr_block_id: ValueId,
 }
 
-#[derive(Clone)]
-struct Identifier {
-    name: String,
-    variant: usize,
+pub struct Block {
+    pub current_defintions: HashMap<String, ValueId>,
+    pub incomplete_phis: HashMap<String, ValueId>,
+    pub instructions: Vec<ValueId>,
+
+    pub filled: bool,
+    pub sealed: bool,
+
+    pub predecessors: Vec<BlockId>, 
+    pub successors: Vec<BlockId>
 }
 
-#[derive(Clone)]
-enum Expression {
-    Binary {
-        lhs: Identifier,
-        rhs: Identifier,
-        operator: lexer::Token
-    },
-    Unary {
-        operand: Identifier,
-        operator: lexer::Token,
-    },
-    Phi {
-        operands: Vec<Identifier>,
-    },
-    Identifier(Identifier),
+pub enum BinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    And,
+    Or,
+    Xor,
+    LShift,
+    RShift,
+    LNot, // LAnd and LOr are handled in the CFG for short circuiting
+    GT,
+    GTE,
+    LT,
+    LTE,
+    Eq,
+    NotEq,
+}
+
+pub enum UnaryOp {
+    Not, 
+    Neg,
+}
+
+pub enum Value {
     Int(i64),
     Float(f64),
     Bool(bool),
     Char(char),
     String(String),
-}
-
-#[derive(Clone)]
-enum Statement {
-    Declaration {
-        lhs: Identifier,
-        rhs: Expression,
+    Binary {
+        op: BinaryOp,
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+    Unary {
+        op: UnaryOp,
+        member: ValueId,
+    },
+    GetElmPtr {
+        base: ValueId,
+        index: ValueId,
+        size: usize,
+    },
+    Load(ValueId),
+    Store {
+        address: ValueId,
+        value: ValueId,
+    },
+    Call {
+        name: String,
+        args: Vec<ValueId>,
+    },
+    Jump(BlockId),
+    Branch {
+        cond: ValueId,
+        if_true: BlockId,
+        if_false: BlockId,
+    },
+    Phi {
+        // variable: String,
+        block: BlockId,
+        operands: Vec<ValueId>,
     }
 }
 
-#[derive(Clone)]
-struct Block {
-    instructions: Vec<Statement>,
-
-    predecessors: Vec<Rc<RefCell<Block>>>,
-    successors: Vec<Rc<RefCell<Block>>>,
-
-    definitions: HashMap<String, usize>,
-    incomplete_phis: Vec<Expression>,
-    sealed: bool,
-}
-
-fn update_variant(variable: &String, block: &mut Block) -> usize {
-    let Some(variant) = block.definitions.get(variable) else {
-        unreachable!("could not find a defininition for {}", *variable);
-    };
-
-    let new = variant + 1;
-    block.definitions.insert(variable.clone(), new);
-    return new;
-}
-
-fn read_variable(variable: &String, block: &mut Block) -> usize {
-    if let Some(current) = block.definitions.get(variable) {
-        return current.clone();
-    }
-
-    return read_variable_recursive(variable, block);
-}
-
-fn read_variable_recursive(variable: &String, block: &mut Block) -> usize {
-    if !block.sealed {
-        let val = Expression::Phi { operands: Vec::new() };
-        let out = update_variant(variable, block);
-        block.incomplete_phis.push(val);
-        return out;
-    } else if block.predecessors.len() == 1 {
-        let mut predecessor = (&block.predecessors[0]).borrow_mut();
-        return read_variable(variable, &mut *predecessor);
-    } else {
-        let mut phi = Expression::Phi { operands: Vec::new() };
-        let out = update_variant(variable, block);
-        add_phi_operands(variable, &mut phi, block);
-        return out;
-    }
-}
-
-fn add_phi_operands(variable: &String, phi: &mut Expression, block: &Block) {
-    let Expression::Phi { operands } = phi else {
-        unreachable!("RCM internal: can not call IR:add_phi_operands with a non-phi block input");
-    };
-
-    for predecessor in block.predecessors.iter() {
-        let mut pred = predecessor.borrow_mut();
-        let variant = read_variable(variable, &mut *pred);
-        operands.push(Identifier {
-            name: variable.clone(),
-            variant
-        });
-    }
-}
-
-impl SSAGen {
+impl SSA {
     pub fn new() -> Self {
         Self {
             blocks: Vec::new(),
-            t_counter: 0,
+            values: Vec::new(),
+            types: Vec::new(),
+
+            curr_val_id: 0,
+            curr_block_id: 0,
         }
     }
 
-    fn add_tmp_var(&mut self, expr: Expression, block: &mut Block) -> Identifier {
-        let variable = Identifier {
-            name: "t".to_owned(),
-            variant: self.t_counter,
-        };
+    fn add_variable(&mut self, value: Value) -> ValueId {
+        self.values.push(value);
+        self.curr_val_id += 1;
+        return self.curr_val_id - 1;
+    }
 
-        let decl = Statement::Declaration {
-            lhs: variable.clone(),
-            rhs: expr,
-        };
-
-        block.instructions.push(decl);
-        self.t_counter += 1;
-
-        return variable;
-    } 
-
-    fn expression_SSA(&mut self, expr: parser::Expression, block: &mut Block) -> Identifier {
-        match expr {
-            parser::Expression::Int(val) => {
-                return self.add_tmp_var(
-                    Expression::Int(val),
-                    block
-                );
-            }
-            parser::Expression::Float(val) => {
-                return self.add_tmp_var(
-                    Expression::Float(val),
-                    block
-                );
-            }
-            parser::Expression::Bool(val) => {
-                return self.add_tmp_var(
-                    Expression::Bool(val),
-                    block
-                );
-            }
-            parser::Expression::Char(val) => {
-                return self.add_tmp_var(
-                    Expression::Char(val),
-                    block
-                );
-            }
-            parser::Expression::String(val) => {
-                return self.add_tmp_var(
-                    Expression::String(val),
-                    block
-                );
-            }
-            parser::Expression::Identifier(val) => {
-                let variant = read_variable(&val, block);
-                return Identifier {
-                    name: val,
-                    variant
-                };
-            }
-            parser::Expression::Binary {
-                lhs,
-                operator,
-                rhs,
-            } => {
-                let lval = self.expression_SSA(*lhs, block);
-                let rval = self.expression_SSA(*rhs, block);
-                let val = Expression::Binary {
-                    lhs: lval,
-                    rhs: rval,
-                    operator
-                };
-
-                return self.add_tmp_var(val, block);
-            }
-            parser::Expression::Unary {
-                member,
-                operator,
-            } => {
-                let operand = self.expression_SSA(*member, block);
-                let val = Expression::Unary { operand, operator };
-                return self.add_tmp_var(val, block);
-            }
-            parser::Expression::Dot {
-                lhs,
-                rhs,
-            } => {
-                // TODO: remember the implicit ptr deref
-                todo!();
-            }
-            parser::Expression::Assignment {
-                identifier,
-                value
-            } => {
-                // honestly i dont have a clue what im supposed to do here
-                // let lhs = self.expression_SSA(*identifier, block);
-                // let rhs = self.expression_SSA(*value, block);
-                // let variant = update_variant(&lhs.name, block);
-                // let decl = Statement::Declaration {
-                //     lhs: Identifier {
-                //         name: 
-                //     }
-                // };
-                todo!();
-            }
-            _ => {
-                unimplemented!();
-            }
+    fn write_variable(&mut self, variable: String, block: BlockId, value: ValueId) {
+        let b = &mut self.blocks[block];
+        if let Some(_) = b.current_defintions.get(&variable) {
+            b.current_defintions.insert(variable, value);
         }
     }
 
-    // fn statement_SSA(statement: parser::Statement) {
-    //     match statement {
-    //         parser::Statement::ExpressionStatement(expr) => {
-    //         }
-    //     }
-    // }
-} 
+    fn read_variable(&mut self, variable: String, block: BlockId) -> ValueId {
+        if let Some(value) = self.blocks[block].current_defintions.get(&variable) {
+            return value.clone();
+        } 
 
+        self.read_variable_recursive(variable, block)
+    }
 
-pub fn generate_basic_block(block: parser::Statement) {
-    match block {
-        parser::Statement::Block(statements) => {
-            // not *entirely* sure what to do yet
+    fn read_variable_recursive(&mut self, variable: String, block: BlockId) -> ValueId {
+        let mut v: ValueId;
+        if !self.blocks[block].sealed {
+            let phi = Value::Phi { block: block, operands: Vec::new() };
+            v = self.add_variable(phi);
+            self.blocks[block].incomplete_phis.insert(variable, v);
+        } else if self.blocks[block].predecessors.len() == 1 {
+            v = self.read_variable(variable, self.blocks[block].predecessors[0]);
+        } else {
+            let phi = Value::Phi { block: block, operands: Vec::new() };
+            v = self.add_variable(phi);
+            self.write_variable(variable, block, v);
+            v = self.add_phi_operands(variable, v);
         }
-        parser::Statement::WhileStatement { 
-            condition, 
-            block 
-        } => {
-            // generate the necessary CFG
-        }
-        parser::Statement::IfStatement { 
-            condition, 
-            block, 
-            alt 
-        } => {
-            // generate all the necessary CFG
-        }
-        _ => {
-            // actually generate the basic blocks 
+
+        self.write_variable(variable, block, v);
+        return v;
+    }
+
+    fn add_phi_operands(&mut self, variable: String, phi: Value) {
+        let Value::Phi { block, operands } = phi else {
+            panic!("internal error: can not call ir::SSA::add_phi_operands() without a phi variant");
+        };
+
+        for pred in &self.blocks[block].predecessors {
         }
     }
 }
