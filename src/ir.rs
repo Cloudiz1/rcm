@@ -1,3 +1,4 @@
+use crate::lexer;
 use crate::parser;
 use std::collections::HashMap;
 
@@ -5,11 +6,29 @@ pub type BlockId = usize;
 pub type ValueId = usize;
 const UNDEF_ID: usize = 0;
 
+#[derive(Copy, Clone, Debug)]
+struct HashableFloat(f64);
+
+impl PartialEq for HashableFloat {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_bits() == other.0.to_bits()
+    }
+}
+
+impl Eq for HashableFloat {}
+
+impl std::hash::Hash for HashableFloat {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.to_bits().hash(state);
+     } 
+}
+
 pub struct SSA {
-    blocks: Vec<Block>, // uses BlockId
-    values: Vec<Value>, // uses ValueId
+    blocks_arena: Vec<Block>,
+    values_arena: Vec<Value>, 
+    values_table: HashMap<Value, ValueId>, // for LVN
+    use_chains: Vec<Vec<ValueId>>, // for removing trivial phis
     types: Vec<parser::Type>, // uses ValueId
-    use_chains: Vec<Vec<ValueId>>,
 
     // track the current id for arenas
     curr_val_id: ValueId,
@@ -17,7 +36,7 @@ pub struct SSA {
 }
 
 pub struct Block {
-    pub current_defintions: HashMap<String, ValueId>,
+    pub current_definitions: HashMap<String, ValueId>,
     pub incomplete_phis: HashMap<String, ValueId>,
     pub instructions: Vec<ValueId>,
 
@@ -28,7 +47,7 @@ pub struct Block {
     pub successors: Vec<BlockId>
 }
 
-#[derive(Clone)]
+#[derive(Clone, Hash, Eq, PartialEq)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -49,16 +68,16 @@ pub enum BinaryOp {
     NotEq,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Hash, Eq, PartialEq)]
 pub enum UnaryOp {
     Not, 
     Neg,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Hash, Eq, PartialEq)]
 pub enum Value {
     Int(i64),
-    Float(f64),
+    Float(HashableFloat),
     Bool(bool),
     Char(char),
     String(String),
@@ -101,8 +120,9 @@ pub enum Value {
 impl SSA {
     pub fn new() -> Self {
         Self {
-            blocks: Vec::new(),
-            values: Vec::new(),
+            blocks_arena: Vec::new(),
+            values_arena: Vec::new(),
+            values_table: HashMap::new(),
             types: Vec::new(),
             use_chains: Vec::new(),
 
@@ -115,19 +135,21 @@ impl SSA {
         self.use_chains[operand].push(user);
     }
 
-    fn add_variable(&mut self, value: Value) -> ValueId {
-        self.values.push(value);
+    fn add_value(&mut self, value: Value) -> ValueId {
+        if let Some(id) = self.values_table.get(&value) { return *id }
+        self.values_table.insert(value.clone(), self.curr_val_id);
+        self.values_arena.push(value);
         self.curr_val_id += 1;
         return self.curr_val_id - 1;
     }
 
     fn write_variable(&mut self, variable: String, block: BlockId, value: ValueId) {
-        let b = &mut self.blocks[block];
-        b.current_defintions.insert(variable, value);
+        let b = &mut self.blocks_arena[block];
+        b.current_definitions.insert(variable, value);
     }
 
     fn read_variable(&mut self, variable: String, block: BlockId) -> ValueId {
-        if let Some(value) = self.blocks[block].current_defintions.get(&variable) {
+        if let Some(value) = self.blocks_arena[block].current_definitions.get(&variable) {
             return value.clone();
         } 
 
@@ -136,15 +158,15 @@ impl SSA {
 
     fn read_variable_recursive(&mut self, variable: String, block: BlockId) -> ValueId {
         let v: ValueId;
-        if !self.blocks[block].sealed {
+        if !self.blocks_arena[block].sealed {
             let phi = Value::Phi { variable: variable.clone(), block, operands: Vec::new() };
-            v = self.add_variable(phi);
-            self.blocks[block].incomplete_phis.insert(variable.clone(), v);
-        } else if self.blocks[block].predecessors.len() == 1 {
-            v = self.read_variable(variable.clone(), self.blocks[block].predecessors[0]);
+            v = self.add_value(phi);
+            self.blocks_arena[block].incomplete_phis.insert(variable.clone(), v);
+        } else if self.blocks_arena[block].predecessors.len() == 1 {
+            v = self.read_variable(variable.clone(), self.blocks_arena[block].predecessors[0]);
         } else {
             let phi = Value::Phi { variable: variable.clone(), block, operands: Vec::new() };
-            v = self.add_variable(phi.clone());
+            v = self.add_value(phi.clone());
             self.write_variable(variable.clone(), block, v);
             self.add_phi_operands(variable.clone(), v);
         }
@@ -154,12 +176,12 @@ impl SSA {
     }
 
     fn add_phi_operands(&mut self, variable: String, phi_id: ValueId) -> ValueId {
-        let block_id = match &self.values[phi_id] {
+        let block_id = match &self.values_arena[phi_id] {
             Value::Phi { block, .. } => *block,
             _ => panic!("internal error: can not call ir::SSA::add_phi_operands() without a phi variant"),
         };
 
-        let preds = self.blocks[block_id].predecessors.to_owned();
+        let preds = self.blocks_arena[block_id].predecessors.to_owned();
         let mut new_operands: Vec<ValueId> = Vec::new();
 
         for pred in preds {
@@ -168,7 +190,7 @@ impl SSA {
             new_operands.push(operand);
         }
 
-        if let Value::Phi { operands, .. } = &mut self.values[phi_id] {
+        if let Value::Phi { operands, .. } = &mut self.values_arena[phi_id] {
             *operands = new_operands.clone();
         }
 
@@ -177,7 +199,7 @@ impl SSA {
 
     fn remove_trivial_phi(&mut self, phi_id: ValueId) -> ValueId {
         let same = {
-            let Value::Phi { operands, ..} = &self.values[phi_id] else { return phi_id };
+            let Value::Phi { operands, ..} = &self.values_arena[phi_id] else { return phi_id };
             let mut same: Option<ValueId> = None;
             for &op in operands {
                 if Some(op) == same || op == phi_id { continue };
@@ -193,7 +215,7 @@ impl SSA {
             if user_id == phi_id { continue }
             self.reroute(user_id, phi_id, same);
 
-            if let Value::Phi { .. } = self.values[user_id] {
+            if let Value::Phi { .. } = self.values_arena[user_id] {
                 self.remove_trivial_phi(user_id);
             }
         }
@@ -202,14 +224,14 @@ impl SSA {
     }
 
     fn reroute(&mut self, user_id: ValueId, old: ValueId, new: ValueId) {
-        match &mut self.values[user_id] {
+        match &mut self.values_arena[user_id] {
             Value::Binary { lhs, rhs, ..} => {
                 if *lhs == old { *lhs = new }
                 if *rhs == old { *rhs = new }
             },
             Value::Phi { operands, .. } => {
                 for op in operands.iter_mut() {
-                    if *op == old { *op = new }
+                    if *op == old { *op = new; }
                 }
             }
             _ => unimplemented!("reroute is still a WIP"),
@@ -219,11 +241,62 @@ impl SSA {
     }
 
     fn seal_block(&mut self, block_id: BlockId) {
-        let incomplete_phis = std::mem::take(&mut self.blocks[block_id].incomplete_phis);
+        let incomplete_phis = std::mem::take(&mut self.blocks_arena[block_id].incomplete_phis);
         for (variable, phi) in incomplete_phis {
             self.add_phi_operands(variable, phi);
         }
 
-        self.blocks[block_id].sealed = true;
+        self.blocks_arena[block_id].sealed = true;
+    }
+}
+
+// the more 'TAC' like stuff
+impl SSA {
+    fn expr(&mut self, expr: parser::Expression) -> ValueId {
+        match expr {
+            parser::Expression::Int(i) => self.add_value(Value::Int(i)),
+            parser::Expression::Float(f) => self.add_value(Value::Float(HashableFloat(f))),
+            parser::Expression::Bool(b) => self.add_value(Value::Bool(b)),
+            parser::Expression::Char(c) => self.add_value(Value::Char(c)),
+            parser::Expression::Binary { 
+                mut lhs, 
+                operator, 
+                mut rhs, 
+            } => {
+                if [lexer::Token::Plus,
+                    lexer::Token::Star,
+                    lexer::Token::Ampersand,
+                    lexer::Token::Pipe,
+                    lexer::Token::Caret
+                ].contains(&operator) {
+                    std::mem::swap(&mut lhs, &mut rhs);
+                }
+
+                let op = match operator {
+                    lexer::Token::Plus => BinaryOp::Add,
+                    lexer::Token::Minus => BinaryOp::Sub,
+                    lexer::Token::Star => BinaryOp::Mul,
+                    lexer::Token::Slash => BinaryOp::Div,
+                    lexer::Token::Percent => BinaryOp::Mod,
+                    lexer::Token::Pipe => BinaryOp::Or,
+                    lexer::Token::Caret => BinaryOp::Xor,
+                    lexer::Token::DoubleLeftCaret => BinaryOp::LShift,
+                    lexer::Token::DoubleRightCaret => BinaryOp::RShift,
+                    lexer::Token::Bang => BinaryOp::LNot,
+                    lexer::Token::LeftCaret => BinaryOp::GT,
+                    lexer::Token::LeftCaretEqual => BinaryOp::GTE,
+                    lexer::Token::RightCaret => BinaryOp::LT,
+                    lexer::Token::RightCaretEqual => BinaryOp::LTE,
+                    lexer::Token::EqualEqual => BinaryOp::Eq,
+                    lexer::Token::BangEqual => BinaryOp::NotEq,
+                    _ => panic!("internal error: invalid operator"),
+                };
+                
+                let new_lhs = self.expr(*lhs);
+                let new_rhs = self.expr(*rhs);
+                let val = Value::Binary { op, lhs: new_lhs, rhs: new_rhs };
+                self.add_value(val)
+            }
+        }
     }
 }

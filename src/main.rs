@@ -7,6 +7,9 @@ pub mod parser;
 pub mod analysis;
 pub mod ir;
 
+// for lsp highlighting
+pub mod ir_bak;
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() == 1 {
