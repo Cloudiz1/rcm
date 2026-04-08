@@ -7,7 +7,7 @@ pub type ValueId = usize;
 const UNDEF_ID: usize = 0;
 
 #[derive(Copy, Clone, Debug)]
-struct HashableFloat(f64);
+pub struct HashableFloat(f64);
 
 impl PartialEq for HashableFloat {
     fn eq(&self, other: &Self) -> bool {
@@ -45,6 +45,22 @@ pub struct Block {
 
     pub predecessors: Vec<BlockId>, 
     pub successors: Vec<BlockId>
+}
+
+impl Block {
+    fn new() -> Self {
+        Self {
+            current_definitions: HashMap::new(),
+            incomplete_phis: HashMap::new(),
+            instructions: Vec::new(),
+
+            filled: false,
+            sealed: false,
+
+            predecessors: Vec::new(),
+            successors: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Hash, Eq, PartialEq)]
@@ -105,15 +121,26 @@ pub enum Value {
         args: Vec<ValueId>,
     },
     Jump(BlockId),
-    Branch {
-        cond: ValueId,
-        if_true: BlockId,
-        if_false: BlockId,
-    },
+    // Branch {
+    //     cond: ValueId,
+    //     if_true: BlockId,
+    //     if_false: BlockId,
+    // },
     Phi {
         variable: String,
         block: BlockId,
         operands: Vec<ValueId>,
+    }
+}
+
+// handles dot operators
+fn expr_to_string(expr: parser::Expression) -> String {
+    match expr {
+        parser::Expression::Identifier(s) => s,
+        parser::Expression::Dot {
+            lhs, rhs
+        } => std::format!("{}.{}", expr_to_string(*lhs), rhs),
+       _ => panic!("internal error: can not convert {:?} to a string", expr),
     }
 }
 
@@ -133,6 +160,12 @@ impl SSA {
 
     fn add_use(&mut self, operand: ValueId, user: ValueId) {
         self.use_chains[operand].push(user);
+    }
+
+    fn add_block(&mut self, block: Block) -> BlockId {
+        self.blocks_arena.push(block);
+        self.curr_block_id += 1;
+        return self.curr_block_id - 1;
     }
 
     fn add_value(&mut self, value: Value) -> ValueId {
@@ -229,6 +262,9 @@ impl SSA {
                 if *lhs == old { *lhs = new }
                 if *rhs == old { *rhs = new }
             },
+            Value::Unary { member, .. } => {
+                if *member == old { *member = new }
+            }
             Value::Phi { operands, .. } => {
                 for op in operands.iter_mut() {
                     if *op == old { *op = new; }
@@ -252,6 +288,32 @@ impl SSA {
 
 // the more 'TAC' like stuff
 impl SSA {
+    fn statement(&mut self, stmt: parser::Statement, pred: Option<BlockId>) {
+        use parser::Statement;
+        match stmt {
+            Statement::Block(stmts) => {
+                let mut b = Block::new();
+                if let Some(p) = pred { b.predecessors.push(p); }
+                let b_id = self.add_block(b);
+
+                for s in stmts {
+                    self.statement(*s, Some(b_id));
+                }
+            }
+            Statement::ParseError => panic!("internal error: how did a ParseError even make its way to IR gen"),
+            // TODO: get current block id
+            Statement::ExpressionStatement(expr) => { self.expr(expr); },
+            Statement::VariableDeclaration {
+                identifier, 
+                variable_type, 
+                initial_value, 
+                ..
+            } => {
+                self.write_variable(identifier,)
+            }
+        }
+    }
+
     fn expr(&mut self, expr: parser::Expression) -> ValueId {
         match expr {
             parser::Expression::Int(i) => self.add_value(Value::Int(i)),
@@ -297,6 +359,50 @@ impl SSA {
                 let val = Value::Binary { op, lhs: new_lhs, rhs: new_rhs };
                 self.add_value(val)
             }
+            parser::Expression::Unary { 
+                operator, 
+                member 
+            } => {
+                let op = match operator {
+                    lexer::Token::Bang => UnaryOp::Not,
+                    lexer::Token::Minus => UnaryOp::Neg,
+                    _ => panic!("internal error: invalid unary operator")
+                };
+
+                let new_member = self.expr(*member);
+                let val = Value::Unary { op, member: new_member };
+                self.add_value(val)
+            }
+            parser::Expression::Identifier(name) => {
+                // TODO: Current BlockId
+                self.read_variable(name, 0)
+            }
+            e @ parser::Expression::Dot { .. } => {
+                // TODO: Current BlockId
+                self.read_variable(expr_to_string(e), 0)
+            }
+            parser::Expression::Assignment { 
+                identifier, 
+                value 
+            } => {
+                // TODO: Current BlockId
+                let val = self.expr(*value);
+                self.write_variable(expr_to_string(*identifier), 0, val);
+                return val;
+            }
+            parser::Expression::FunctionCall {
+                identifier, args
+            } => todo!(),
+            parser::Expression::ArrayAccess {
+                identifier, index 
+            } => todo!(),
+            parser::Expression::ArrayConstructor {
+                values
+            } => todo!(),
+            parser::Expression::StructConstructor {
+                identifier, members
+            } => todo!(),
+            _ => todo!(),
         }
     }
 }
