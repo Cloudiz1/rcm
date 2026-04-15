@@ -309,6 +309,9 @@ impl SSA {
                 for s in stmts {
                     self.statement(*s);
                 }
+
+                self.blocks[b].filled = true;
+                self.blocks[b].sealed = true;
             }
             Statement::ExpressionStatement(expr) => { self.expr(expr); },
             Statement::VariableDeclaration {
@@ -327,7 +330,7 @@ impl SSA {
                 body, 
                 public 
             } => {
-                self.add_block(Block::new(self.pred)); // adds param to entry block
+                let entry = self.add_block(Block::new(self.pred)); // adds param to entry block
                 for (i, p) in parameters.into_iter().enumerate() {
                     let parser::Statement::Parameter { name, t } = *p else { unreachable!() };
                     let param = Value::Parameter { index: i, t };
@@ -335,6 +338,8 @@ impl SSA {
                     self.write_variable(name, self.curr_block_id, param_id);
                 };
 
+                self.blocks[entry].filled = true;
+                self.blocks[entry].sealed = true;
                 self.statement(*body);
             }
             Statement::WhileStatement { 
@@ -343,12 +348,13 @@ impl SSA {
             } => {
                 let entry = self.add_block(Block::new(self.pred));
                 self.expr(condition);
+                self.blocks[entry].filled = true; // NOT SEALED
 
                 self.statement(*block); 
                 self.blocks[entry].predecessors.push(self.curr_block_id); // loop to while header
+                self.blocks[entry].sealed = true; // we made our loop, thats our last pred
 
-                // once we finish building the loop, we set the current pred to the header again, so
-                // when the next block generates itll use that
+                // we need the next block to attach the entry
                 self.pred = Some(entry);
             }
             Statement::IfStatement { 
@@ -359,18 +365,30 @@ impl SSA {
                 let entry = self.add_block(Block::new(self.pred));
                 self.expr(condition);
 
+                self.blocks[entry].filled = true;
+                self.blocks[entry].sealed = true;
+
                 self.statement(*block); // then
-                let merge_b = self.add_block(Block::new(None)); // pred is then_block
+                let then_b = self.pred.unwrap();
+                self.blocks[then_b].filled = true;
+                self.blocks[then_b].sealed = true;
+
+                let merge_b = self.add_block(Block::new(None));
 
                 if let Some(alt_b) = alt {
-                    self.pred = Some(entry);
+                    self.pred = Some(entry); 
                     self.statement(*alt_b);
                     let else_b = self.pred.unwrap();
+                    self.blocks[else_b].filled = true;
+                    self.blocks[else_b].sealed = true;
 
                     // create the edge between else and merge
                     self.blocks[else_b].successors[merge_b];
                     self.blocks[merge_b].predecessors[else_b];
                 }
+
+                self.blocks[merge_b].filled = true;
+                self.blocks[merge_b].sealed = true;
 
                 self.pred = Some(merge_b);
             }
