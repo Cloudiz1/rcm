@@ -23,32 +23,8 @@ impl std::hash::Hash for HashableFloat {
      } 
 }
 
-pub struct SSA {
-    blocks_arena: Vec<Block>,
-    values_arena: Vec<Value>, 
-    values_table: HashMap<Value, ValueId>, // for LVN
-    use_chains: Vec<Vec<ValueId>>, // for removing trivial phis
-    types: Vec<parser::Type>, // uses ValueId
-
-    // track the current id for arenas
-    curr_val_id: ValueId,
-    curr_block_id: ValueId,
-}
-
-pub struct Block {
-    pub current_definitions: HashMap<String, ValueId>,
-    pub incomplete_phis: HashMap<String, ValueId>,
-    pub instructions: Vec<ValueId>,
-
-    pub filled: bool,
-    pub sealed: bool,
-
-    pub predecessors: Vec<BlockId>, 
-    pub successors: Vec<BlockId>
-}
-
 impl Block {
-    fn new() -> Self {
+    fn new(pred: Option<BlockId>) -> Self {
         Self {
             current_definitions: HashMap::new(),
             incomplete_phis: HashMap::new(),
@@ -57,7 +33,7 @@ impl Block {
             filled: false,
             sealed: false,
 
-            predecessors: Vec::new(),
+            predecessors: pred.map_or(Vec::new(), |p| Vec::from([p])),
             successors: Vec::new(),
         }
     }
@@ -130,6 +106,10 @@ pub enum Value {
         variable: String,
         block: BlockId,
         operands: Vec<ValueId>,
+    },
+    Parameter {
+        index: usize,
+        t: parser::Type,
     }
 }
 
@@ -144,17 +124,43 @@ fn expr_to_string(expr: parser::Expression) -> String {
     }
 }
 
+pub struct SSA {
+    blocks: Vec<Block>,
+    values: Vec<Value>, 
+    values_table: HashMap<Value, ValueId>, // for LVN
+    use_chains: Vec<Vec<ValueId>>, // for removing trivial phis
+    types: Vec<parser::Type>, // uses ValueId
+
+    // track the current id for arenas
+    curr_val_id: ValueId,
+    curr_block_id: ValueId,
+    pred: Option<BlockId>,
+}
+
+pub struct Block {
+    pub current_definitions: HashMap<String, ValueId>,
+    pub incomplete_phis: HashMap<String, ValueId>,
+    pub instructions: Vec<ValueId>,
+
+    pub filled: bool,
+    pub sealed: bool,
+
+    pub predecessors: Vec<BlockId>, 
+    pub successors: Vec<BlockId>
+}
+
 impl SSA {
     pub fn new() -> Self {
         Self {
-            blocks_arena: Vec::new(),
-            values_arena: Vec::new(),
+            blocks: Vec::new(),
+            values: Vec::new(),
             values_table: HashMap::new(),
             types: Vec::new(),
             use_chains: Vec::new(),
 
             curr_val_id: UNDEF_ID + 1,
             curr_block_id: 0,
+            pred: None,
         }
     }
 
@@ -163,7 +169,12 @@ impl SSA {
     }
 
     fn add_block(&mut self, block: Block) -> BlockId {
-        self.blocks_arena.push(block);
+        if let Some(p) = self.pred {
+            self.blocks[p].successors.push(p);
+        }
+
+        self.pred = Some(self.curr_block_id);
+        self.blocks.push(block);
         self.curr_block_id += 1;
         return self.curr_block_id - 1;
     }
@@ -171,18 +182,18 @@ impl SSA {
     fn add_value(&mut self, value: Value) -> ValueId {
         if let Some(id) = self.values_table.get(&value) { return *id }
         self.values_table.insert(value.clone(), self.curr_val_id);
-        self.values_arena.push(value);
+        self.values.push(value);
         self.curr_val_id += 1;
         return self.curr_val_id - 1;
     }
 
     fn write_variable(&mut self, variable: String, block: BlockId, value: ValueId) {
-        let b = &mut self.blocks_arena[block];
+        let b = &mut self.blocks[block];
         b.current_definitions.insert(variable, value);
     }
 
     fn read_variable(&mut self, variable: String, block: BlockId) -> ValueId {
-        if let Some(value) = self.blocks_arena[block].current_definitions.get(&variable) {
+        if let Some(value) = self.blocks[block].current_definitions.get(&variable) {
             return value.clone();
         } 
 
@@ -191,12 +202,12 @@ impl SSA {
 
     fn read_variable_recursive(&mut self, variable: String, block: BlockId) -> ValueId {
         let v: ValueId;
-        if !self.blocks_arena[block].sealed {
+        if !self.blocks[block].sealed {
             let phi = Value::Phi { variable: variable.clone(), block, operands: Vec::new() };
             v = self.add_value(phi);
-            self.blocks_arena[block].incomplete_phis.insert(variable.clone(), v);
-        } else if self.blocks_arena[block].predecessors.len() == 1 {
-            v = self.read_variable(variable.clone(), self.blocks_arena[block].predecessors[0]);
+            self.blocks[block].incomplete_phis.insert(variable.clone(), v);
+        } else if self.blocks[block].predecessors.len() == 1 {
+            v = self.read_variable(variable.clone(), self.blocks[block].predecessors[0]);
         } else {
             let phi = Value::Phi { variable: variable.clone(), block, operands: Vec::new() };
             v = self.add_value(phi.clone());
@@ -209,12 +220,12 @@ impl SSA {
     }
 
     fn add_phi_operands(&mut self, variable: String, phi_id: ValueId) -> ValueId {
-        let block_id = match &self.values_arena[phi_id] {
+        let block_id = match &self.values[phi_id] {
             Value::Phi { block, .. } => *block,
             _ => panic!("internal error: can not call ir::SSA::add_phi_operands() without a phi variant"),
         };
 
-        let preds = self.blocks_arena[block_id].predecessors.to_owned();
+        let preds = self.blocks[block_id].predecessors.to_owned();
         let mut new_operands: Vec<ValueId> = Vec::new();
 
         for pred in preds {
@@ -223,7 +234,7 @@ impl SSA {
             new_operands.push(operand);
         }
 
-        if let Value::Phi { operands, .. } = &mut self.values_arena[phi_id] {
+        if let Value::Phi { operands, .. } = &mut self.values[phi_id] {
             *operands = new_operands.clone();
         }
 
@@ -232,7 +243,7 @@ impl SSA {
 
     fn remove_trivial_phi(&mut self, phi_id: ValueId) -> ValueId {
         let same = {
-            let Value::Phi { operands, ..} = &self.values_arena[phi_id] else { return phi_id };
+            let Value::Phi { operands, ..} = &self.values[phi_id] else { return phi_id };
             let mut same: Option<ValueId> = None;
             for &op in operands {
                 if Some(op) == same || op == phi_id { continue };
@@ -248,7 +259,7 @@ impl SSA {
             if user_id == phi_id { continue }
             self.reroute(user_id, phi_id, same);
 
-            if let Value::Phi { .. } = self.values_arena[user_id] {
+            if let Value::Phi { .. } = self.values[user_id] {
                 self.remove_trivial_phi(user_id);
             }
         }
@@ -257,7 +268,7 @@ impl SSA {
     }
 
     fn reroute(&mut self, user_id: ValueId, old: ValueId, new: ValueId) {
-        match &mut self.values_arena[user_id] {
+        match &mut self.values[user_id] {
             Value::Binary { lhs, rhs, ..} => {
                 if *lhs == old { *lhs = new }
                 if *rhs == old { *rhs = new }
@@ -277,31 +288,28 @@ impl SSA {
     }
 
     fn seal_block(&mut self, block_id: BlockId) {
-        let incomplete_phis = std::mem::take(&mut self.blocks_arena[block_id].incomplete_phis);
+        let incomplete_phis = std::mem::take(&mut self.blocks[block_id].incomplete_phis);
         for (variable, phi) in incomplete_phis {
             self.add_phi_operands(variable, phi);
         }
 
-        self.blocks_arena[block_id].sealed = true;
+        self.blocks[block_id].sealed = true;
     }
 }
 
 // the more 'TAC' like stuff
 impl SSA {
-    fn statement(&mut self, stmt: parser::Statement, pred: Option<BlockId>) {
+    fn statement(&mut self, stmt: parser::Statement) {
         use parser::Statement;
         match stmt {
+            Statement::ParseError => panic!("internal error: how did a ParseError even make its way to IR gen"),
             Statement::Block(stmts) => {
-                let mut b = Block::new();
-                if let Some(p) = pred { b.predecessors.push(p); }
-                let b_id = self.add_block(b);
+                let b = self.add_block(Block::new(self.pred));
 
                 for s in stmts {
-                    self.statement(*s, Some(b_id));
+                    self.statement(*s);
                 }
             }
-            Statement::ParseError => panic!("internal error: how did a ParseError even make its way to IR gen"),
-            // TODO: get current block id
             Statement::ExpressionStatement(expr) => { self.expr(expr); },
             Statement::VariableDeclaration {
                 identifier, 
@@ -309,7 +317,70 @@ impl SSA {
                 initial_value, 
                 ..
             } => {
-                self.write_variable(identifier,)
+                let val = initial_value.map_or(UNDEF_ID, |e| self.expr(e));
+                self.write_variable(identifier, self.curr_block_id, val);
+            }
+            Statement::FunctionDeclaration { 
+                name, 
+                return_type, 
+                parameters, 
+                body, 
+                public 
+            } => {
+                self.add_block(Block::new(self.pred)); // adds param to entry block
+                for (i, p) in parameters.into_iter().enumerate() {
+                    let parser::Statement::Parameter { name, t } = *p else { unreachable!() };
+                    let param = Value::Parameter { index: i, t };
+                    let param_id = self.add_value(param);
+                    self.write_variable(name, self.curr_block_id, param_id);
+                };
+
+                self.statement(*body);
+            }
+            Statement::WhileStatement { 
+                condition, 
+                block 
+            } => {
+                let entry = self.add_block(Block::new(self.pred));
+                self.expr(condition);
+
+                self.statement(*block); 
+                self.blocks[entry].predecessors.push(self.curr_block_id); // loop to while header
+
+                // once we finish building the loop, we set the current pred to the header again, so
+                // when the next block generates itll use that
+                self.pred = Some(entry);
+            }
+            Statement::IfStatement { 
+                condition, 
+                block, 
+                alt 
+            } => {
+                let entry = self.add_block(Block::new(self.pred));
+                self.expr(condition);
+
+                self.statement(*block); // then
+                let merge_b = self.add_block(Block::new(None)); // pred is then_block
+
+                if let Some(alt_b) = alt {
+                    self.pred = Some(entry);
+                    self.statement(*alt_b);
+                    let else_b = self.pred.unwrap();
+
+                    // create the edge between else and merge
+                    self.blocks[else_b].successors[merge_b];
+                    self.blocks[merge_b].predecessors[else_b];
+                }
+
+                self.pred = Some(merge_b);
+            }
+            Statement::Parameter { .. } => { unreachable!(); }
+            // since these only exist in the frontend, i think this okay?
+            Statement::StructDeclaration { .. } => return,
+            Statement::Member { .. } => return,
+            Statement::Return { value } => {
+                // TODO: read variable and return!
+                return;
             }
         }
     }
@@ -374,20 +445,17 @@ impl SSA {
                 self.add_value(val)
             }
             parser::Expression::Identifier(name) => {
-                // TODO: Current BlockId
-                self.read_variable(name, 0)
+                self.read_variable(name, self.curr_block_id)
             }
             e @ parser::Expression::Dot { .. } => {
-                // TODO: Current BlockId
-                self.read_variable(expr_to_string(e), 0)
+                self.read_variable(expr_to_string(e), self.curr_block_id)
             }
             parser::Expression::Assignment { 
                 identifier, 
                 value 
             } => {
-                // TODO: Current BlockId
                 let val = self.expr(*value);
-                self.write_variable(expr_to_string(*identifier), 0, val);
+                self.write_variable(expr_to_string(*identifier), self.curr_block_id, val);
                 return val;
             }
             parser::Expression::FunctionCall {
