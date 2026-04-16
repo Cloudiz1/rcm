@@ -24,8 +24,9 @@ impl std::hash::Hash for HashableFloat {
 }
 
 impl Block {
-    fn new(pred: Option<BlockId>) -> Self {
+    fn new(pred: Option<BlockId>, name: &'static str) -> Self {
         Self {
+            name,
             current_definitions: HashMap::new(),
             incomplete_phis: HashMap::new(),
             instructions: Vec::new(),
@@ -39,7 +40,7 @@ impl Block {
     }
 }
 
-#[derive(Clone, Hash, Eq, PartialEq)]
+#[derive(Clone, Hash, Eq, PartialEq, Debug)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -60,13 +61,13 @@ pub enum BinaryOp {
     NotEq,
 }
 
-#[derive(Clone, Hash, Eq, PartialEq)]
+#[derive(Clone, Hash, Eq, PartialEq, Debug)]
 pub enum UnaryOp {
     Not, 
     Neg,
 }
 
-#[derive(Clone, Hash, Eq, PartialEq)]
+#[derive(Clone, Hash, Eq, PartialEq, Debug)]
 pub enum Value {
     Int(i64),
     Float(HashableFloat),
@@ -97,11 +98,6 @@ pub enum Value {
         args: Vec<ValueId>,
     },
     Jump(BlockId),
-    // Branch {
-    //     cond: ValueId,
-    //     if_true: BlockId,
-    //     if_false: BlockId,
-    // },
     Phi {
         variable: String,
         block: BlockId,
@@ -127,6 +123,7 @@ fn expr_to_string(expr: parser::Expression) -> String {
 
 #[derive(Debug, Clone)]
 pub struct Block {
+    pub name: &'static str,
     pub current_definitions: HashMap<String, ValueId>,
     pub incomplete_phis: HashMap<String, ValueId>,
     pub instructions: Vec<ValueId>,
@@ -154,7 +151,7 @@ pub struct SSA {
 impl SSA {
     pub fn new() -> Self {
         Self {
-            blocks: Vec::from(&[Block::new(None)]),
+            blocks: Vec::new(),
             values: Vec::from(&[Value::UNDEF]),
             values_table: HashMap::new(),
             types: Vec::new(),
@@ -172,7 +169,7 @@ impl SSA {
 
     fn add_block(&mut self, block: Block) -> BlockId {
         if let Some(p) = self.pred {
-            self.blocks[p].successors.push(p);
+            self.blocks[p].successors.push(self.curr_block_id);
         }
 
         self.pred = Some(self.curr_block_id);
@@ -224,7 +221,10 @@ impl SSA {
     fn add_phi_operands(&mut self, variable: String, phi_id: ValueId) -> ValueId {
         let block_id = match &self.values[phi_id] {
             Value::Phi { block, .. } => *block,
-            _ => panic!("internal error: can not call ir::SSA::add_phi_operands() without a phi variant"),
+            _ => {
+                dbg!(&self.values[phi_id]);
+                panic!("internal error: can not call ir::SSA::add_phi_operands() without a phi variant");
+            }
         };
 
         let preds = self.blocks[block_id].predecessors.to_owned();
@@ -301,15 +301,15 @@ impl SSA {
 
 // the more 'TAC' like stuff
 impl SSA {
-    fn statement(&mut self, stmt: parser::Statement) {
+    fn statement(&mut self, stmt: parser::Statement, block_name: &'static str) {
         use parser::Statement;
         match stmt {
             Statement::ParseError => panic!("internal error: how did a ParseError even make its way to IR gen"),
             Statement::Block(stmts) => {
-                let b = self.add_block(Block::new(self.pred));
+                let b = self.add_block(Block::new(self.pred, block_name));
 
                 for s in stmts {
-                    self.statement(*s);
+                    self.statement(*s, "Basic Block");
                 }
 
                 self.blocks[b].filled = true;
@@ -323,7 +323,7 @@ impl SSA {
                 ..
             } => {
                 let val = initial_value.map_or(UNDEF_ID, |e| self.expr(e));
-                self.write_variable(identifier, self.curr_block_id, val);
+                self.write_variable(identifier, self.curr_block_id - 1, val);
             }
             Statement::FunctionDeclaration { 
                 name, 
@@ -332,28 +332,28 @@ impl SSA {
                 body, 
                 public 
             } => {
-                let entry = self.add_block(Block::new(self.pred)); // adds param to entry block
+                let entry = self.add_block(Block::new(self.pred, "function entry")); // adds param to entry block
                 for (i, p) in parameters.into_iter().enumerate() {
                     let parser::Statement::Parameter { name, t } = *p else { unreachable!() };
                     let param = Value::Parameter { index: i, t };
                     let param_id = self.add_value(param);
-                    self.write_variable(name, self.curr_block_id, param_id);
+                    self.write_variable(name, entry, param_id);
                 };
 
                 self.blocks[entry].filled = true;
                 self.blocks[entry].sealed = true;
-                self.statement(*body);
+                self.statement(*body, "function body");
             }
             Statement::WhileStatement { 
                 condition, 
                 block 
             } => {
-                let entry = self.add_block(Block::new(self.pred));
+                let entry = self.add_block(Block::new(self.pred, "while entry"));
                 self.expr(condition);
                 self.blocks[entry].filled = true; // NOT SEALED
 
-                self.statement(*block); 
-                self.blocks[entry].predecessors.push(self.curr_block_id); // loop to while header
+                self.statement(*block, "while body"); 
+                self.blocks[entry].predecessors.push(self.curr_block_id - 1); // loop to while header
                 self.blocks[entry].sealed = true; // we made our loop, thats our last pred
 
                 // we need the next block to attach the entry
@@ -364,22 +364,22 @@ impl SSA {
                 block, 
                 alt 
             } => {
-                let entry = self.add_block(Block::new(self.pred));
+                let entry = self.add_block(Block::new(self.pred, "if entry"));
                 self.expr(condition);
 
                 self.blocks[entry].filled = true;
                 self.blocks[entry].sealed = true;
 
-                self.statement(*block); // then
+                self.statement(*block, "then block"); // then
                 let then_b = self.pred.unwrap();
                 self.blocks[then_b].filled = true;
                 self.blocks[then_b].sealed = true;
 
-                let merge_b = self.add_block(Block::new(None));
+                let merge_b = self.add_block(Block::new(None, "if merge"));
 
                 if let Some(alt_b) = alt {
                     self.pred = Some(entry); 
-                    self.statement(*alt_b);
+                    self.statement(*alt_b, "else block");
                     let else_b = self.pred.unwrap();
                     self.blocks[else_b].filled = true;
                     self.blocks[else_b].sealed = true;
@@ -465,17 +465,17 @@ impl SSA {
                 self.add_value(val)
             }
             parser::Expression::Identifier(name) => {
-                self.read_variable(name, self.curr_block_id)
+                self.read_variable(name, self.pred.unwrap())
             }
             e @ parser::Expression::Dot { .. } => {
-                self.read_variable(expr_to_string(e), self.curr_block_id)
+                self.read_variable(expr_to_string(e), self.pred.unwrap())
             }
             parser::Expression::Assignment { 
                 identifier, 
                 value 
             } => {
                 let val = self.expr(*value);
-                self.write_variable(expr_to_string(*identifier), self.curr_block_id, val);
+                self.write_variable(expr_to_string(*identifier), self.pred.unwrap(), val);
                 return val;
             }
             parser::Expression::FunctionCall {
@@ -496,13 +496,20 @@ impl SSA {
 
     pub fn ir_gen(&mut self, statements: Vec<parser::Statement>) {
         for s in statements {
-            self.statement(s);
+            self.statement(s, "entry");
         }
     }
 
     pub fn print_blocks(&self) {
         for (i, block) in self.blocks.iter().enumerate(){
-            println!("{}: {:?}", i, block);
+            println!("{}: {}", i, block.name);
+            println!("    current defs:");
+            block.current_definitions.iter().for_each(|(key, val)| 
+                println!("        {}: {:?}", key, self.values[val.clone()])
+            );
+            println!("    successors: {:?}", block.successors);
+            println!("    predecessors: {:?}", block.predecessors);
+            println!("");
         }
     }
 }

@@ -2,6 +2,12 @@ pub fn main() void {
 	let a: i32 = 3;
 	let b: i32 = 4;
 
+	let i = 0;
+	while i < 3 {
+		a += 2;
+		i += 1;
+	}
+
 	if a < b {
 		a += 1;
 	} else {
@@ -9,4 +15,5 @@ pub fn main() void {
 	}
 
 	let c = a;
+
 }
