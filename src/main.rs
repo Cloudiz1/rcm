@@ -25,7 +25,7 @@ fn main() {
         return;
     };
 
-    lexer::print_tokens(tokens.clone());
+    // lexer::print_tokens(tokens.clone());
 
     let mut parser = parser::Parser::new(tokens, lines, args[1].clone());
     let Some(ast) = parser.parse() else {

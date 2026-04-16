@@ -823,8 +823,8 @@ impl Parser {
             lexer::Token::PipeEqual,
             lexer::Token::AmpersandEqual,
             lexer::Token::CaretEqual,
-            lexer::Token::DoubleLeftCaret,
-            lexer::Token::DoubleRightCaret,
+            lexer::Token::DoubleLeftCaretEqual,
+            lexer::Token::DoubleRightCaretEqual,
         ][..]) {
             let rhs = self.expression();
 
@@ -834,7 +834,21 @@ impl Parser {
                     value: Box::new(rhs),
                 };
             } else {
-                let value = self.create_binary(expr.clone(), operator, rhs);
+                let new_operator = match operator {
+                    lexer::Token::PlusEqual => lexer::Token::Plus,
+                    lexer::Token::MinusEqual => lexer::Token::Minus,
+                    lexer::Token::StarEqual => lexer::Token::Star,
+                    lexer::Token::SlashEqual => lexer::Token::Slash,
+                    lexer::Token::PercentEqual => lexer::Token::Percent,
+                    lexer::Token::PipeEqual => lexer::Token::Pipe,
+                    lexer::Token::AmpersandEqual => lexer::Token::Ampersand,
+                    lexer::Token::CaretEqual => lexer::Token::Caret,
+                    lexer::Token::DoubleLeftCaretEqual => lexer::Token::DoubleLeftCaret,
+                    lexer::Token::DoubleRightCaretEqual => lexer::Token::DoubleRightCaret,
+                    _ => unreachable!(),
+                };
+
+                let value = self.create_binary(expr.clone(), new_operator, rhs);
                 expr = Expression::Assignment {
                     identifier: Box::new(expr),
                     value: Box::new(value),

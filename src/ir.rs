@@ -110,7 +110,8 @@ pub enum Value {
     Parameter {
         index: usize,
         t: parser::Type,
-    }
+    },
+    UNDEF,
 }
 
 // handles dot operators
@@ -122,6 +123,19 @@ fn expr_to_string(expr: parser::Expression) -> String {
         } => std::format!("{}.{}", expr_to_string(*lhs), rhs),
        _ => panic!("internal error: can not convert {:?} to a string", expr),
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct Block {
+    pub current_definitions: HashMap<String, ValueId>,
+    pub incomplete_phis: HashMap<String, ValueId>,
+    pub instructions: Vec<ValueId>,
+
+    pub filled: bool,
+    pub sealed: bool,
+
+    pub predecessors: Vec<BlockId>, 
+    pub successors: Vec<BlockId>
 }
 
 pub struct SSA {
@@ -137,29 +151,16 @@ pub struct SSA {
     pred: Option<BlockId>,
 }
 
-#[derive(Debug)]
-pub struct Block {
-    pub current_definitions: HashMap<String, ValueId>,
-    pub incomplete_phis: HashMap<String, ValueId>,
-    pub instructions: Vec<ValueId>,
-
-    pub filled: bool,
-    pub sealed: bool,
-
-    pub predecessors: Vec<BlockId>, 
-    pub successors: Vec<BlockId>
-}
-
 impl SSA {
     pub fn new() -> Self {
         Self {
-            blocks: Vec::new(),
-            values: Vec::new(),
+            blocks: Vec::from(&[Block::new(None)]),
+            values: Vec::from(&[Value::UNDEF]),
             values_table: HashMap::new(),
             types: Vec::new(),
             use_chains: Vec::new(),
 
-            curr_val_id: UNDEF_ID + 1,
+            curr_val_id: 0,
             curr_block_id: 0,
             pred: None,
         }
@@ -384,8 +385,8 @@ impl SSA {
                     self.blocks[else_b].sealed = true;
 
                     // create the edge between else and merge
-                    self.blocks[else_b].successors[merge_b];
-                    self.blocks[merge_b].predecessors[else_b];
+                    self.blocks[else_b].successors.push(merge_b);
+                    self.blocks[merge_b].predecessors.push(else_b);
                 }
 
                 self.blocks[merge_b].filled = true;
