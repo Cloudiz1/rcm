@@ -1,7 +1,12 @@
 pub fn main() void {
-	let i;
-	let a = 1;
-	while a {
-		a *= 2;
+	let a: i32 = 3;
+	let b: i32 = 4;
+
+	if a < b {
+		a += 1;
+	} else {
+		a -= 1;
 	}
+
+	let c = a;
 }

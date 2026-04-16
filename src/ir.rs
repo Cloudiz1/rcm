@@ -137,6 +137,7 @@ pub struct SSA {
     pred: Option<BlockId>,
 }
 
+#[derive(Debug)]
 pub struct Block {
     pub current_definitions: HashMap<String, ValueId>,
     pub incomplete_phis: HashMap<String, ValueId>,
@@ -489,6 +490,18 @@ impl SSA {
                 identifier, members
             } => todo!(),
             _ => todo!(),
+        }
+    }
+
+    pub fn ir_gen(&mut self, statements: Vec<parser::Statement>) {
+        for s in statements {
+            self.statement(s);
+        }
+    }
+
+    pub fn print_blocks(&self) {
+        for (i, block) in self.blocks.iter().enumerate(){
+            println!("{}: {:?}", i, block);
         }
     }
 }

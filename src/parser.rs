@@ -232,16 +232,16 @@ impl Parser {
         self.input[self.i].token_type.clone()
     }
 
-    // // can peek backwards too
-    // fn peek(&self, index: i32) -> Option<lexer::Token> {
-    //     let i = self.i as i32 + index - 1;
-    //
-    //     if i >= self.input.len() as i32 || i < 0 {
-    //         return None;
-    //     }
-    //
-    //     Some(self.input[i as usize].token_type.clone())
-    // }
+    // can peek backwards too
+    fn peek(&self, index: i32) -> Option<lexer::Token> {
+        let i = self.i as i32 + index;
+
+        if i >= self.input.len() as i32 || i < 0 {
+            return None;
+        }
+
+        Some(self.input[i as usize].token_type.clone())
+    }
 
     fn next(&mut self) -> lexer::Token {
         self.i += 1;
@@ -955,64 +955,74 @@ impl Parser {
     }
 
     fn struct_constructor(&mut self) -> Expression {
-        let mut expr = self.postfix();
+        let expr = self.postfix();
+        let Expression::Identifier(identifier) = &expr else {
+            return expr;
+        };
 
-        match expr.clone() {
-            Expression::Identifier(identifier) => {
-                // ambigious syntax, make sure this isnt the pattern
-                // if foo {
-                //      ...
-                // }
-                // or:
-                // while foo {
-                //      ...
-                // }
-                let token = self.previous();
-                if [lexer::Token::If, lexer::Token::While].contains(&token) {
-                    return expr;
-                }
+        // ambigious syntax, make sure this isnt the pattern
+        // if foo {
+        //      ...
+        // }
+        //
+        // while foo {
+        //      ...
+        // }
+        //
+        // if foo <operator> bar {
+        //      ...
+        // }
+        //TODO: I dont love this solution, if i can find something better that would be great! 
+        let Some(token) = self.peek(-2) else {
+            return expr;
+        };
 
-                // let mut members: Vec<Box<Expression>> = Vec::new();
-                let mut members: Vec<Member> = Vec::new();
-                let mut comma: bool = true;
-
-                if self.current() == lexer::Token::LCurly {
-                    self.advance();
-
-                    while self.current() != lexer::Token::RCurly {
-                        if !comma {
-                            self.error(
-                                "expected comma seperating member values in struct constructor",
-                            );
-                        }
-
-                        let member_name = self.expect_identifier("expected identifier in struct constructor");
-                        self.consume(lexer::Token::Colon, None);
-                        let val = self.expression();
-
-                        comma = false;
-                        if self.current() == lexer::Token::Comma {
-                            self.advance();
-                            comma = true;
-                        }
-
-                        members.push(Member {
-                            identifier: member_name,
-                            val
-                        })
-                    }
-                    self.advance(); // consume RParen
-
-                    expr = Expression::StructConstructor {
-                        identifier,
-                        members,
-                    };
-                }
-            }
-            _ => {}
+        if [lexer::Token::If, 
+            lexer::Token::While,
+            lexer::Token::LeftCaret,
+            lexer::Token::RightCaret,
+            lexer::Token::LeftCaretEqual,
+            lexer::Token::RightCaretEqual,
+            lexer::Token::EqualEqual,
+            lexer::Token::BangEqual,
+            lexer::Token::DoublePipe,
+            lexer::Token::DoubleAmpersand
+        ].contains(&token) {
+            return expr;
         }
 
-        return expr;
+        let mut members: Vec<Member> = Vec::new();
+        let mut comma: bool = true;
+
+        if self.current() != lexer::Token::LCurly {
+            return expr;
+        }
+
+        self.advance();
+
+        while self.current() != lexer::Token::RCurly {
+            if !comma { self.error("expected comma"); }
+            let member_name = self.expect_identifier("expected identifier in struct constructor");
+            self.consume(lexer::Token::Colon, None);
+            let val = self.expression();
+
+            comma = false;
+            if self.current() == lexer::Token::Comma {
+                self.advance();
+                comma = true;
+            }
+
+            members.push(Member {
+                identifier: member_name,
+                val
+            })
+        }
+
+        self.advance(); // consume RCurly
+        return Expression::StructConstructor { 
+            identifier: identifier.clone(), 
+            members 
+        }
     }
 
     fn postfix(&mut self) -> Expression {

@@ -25,15 +25,17 @@ fn main() {
         return;
     };
 
-    // lexer::print_tokens(tokens.clone());
+    lexer::print_tokens(tokens.clone());
 
     let mut parser = parser::Parser::new(tokens, lines, args[1].clone());
     let Some(ast) = parser.parse() else {
         return;
     };
 
-    dbg!(&ast);
-
     let mut analyzer = analysis::Analyzer::new();
-    analyzer.analyze(ast);
+    analyzer.analyze(ast.clone());
+
+    let mut ssa = ir::SSA::new();
+    ssa.ir_gen(ast);
+    ssa.print_blocks();
 }
