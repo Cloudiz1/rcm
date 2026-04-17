@@ -4,7 +4,6 @@ use std::collections::HashMap;
 
 pub type BlockId = usize;
 pub type ValueId = usize;
-const UNDEF_ID: usize = 0;
 
 #[derive(Copy, Clone, Debug)]
 pub struct HashableFloat(f64);
@@ -21,6 +20,12 @@ impl std::hash::Hash for HashableFloat {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.0.to_bits().hash(state);
      } 
+}
+
+impl std::fmt::Display for HashableFloat {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
 }
 
 impl Block {
@@ -152,7 +157,7 @@ impl SSA {
     pub fn new() -> Self {
         Self {
             blocks: Vec::new(),
-            values: Vec::from(&[Value::UNDEF]),
+            values: Vec::new(),
             values_table: HashMap::new(),
             types: Vec::new(),
             use_chains: Vec::new(),
@@ -164,7 +169,7 @@ impl SSA {
     }
 
     fn add_use(&mut self, operand: ValueId, user: ValueId) {
-        self.use_chains[operand].push(user);
+        self.use_chains[operand].push(user)
     }
 
     fn add_block(&mut self, block: Block) -> BlockId {
@@ -182,6 +187,7 @@ impl SSA {
         if let Some(id) = self.values_table.get(&value) { return *id }
         self.values_table.insert(value.clone(), self.curr_val_id);
         self.values.push(value);
+        self.use_chains.push(Vec::new());
         self.curr_val_id += 1;
         return self.curr_val_id - 1;
     }
@@ -202,8 +208,10 @@ impl SSA {
     fn read_variable_recursive(&mut self, variable: String, block: BlockId) -> ValueId {
         let v: ValueId;
         if !self.blocks[block].sealed {
+            dbg!(&self.curr_val_id);
             let phi = Value::Phi { variable: variable.clone(), block, operands: Vec::new() };
             v = self.add_value(phi);
+            dbg!(&variable, v, &self.values[v]);
             self.blocks[block].incomplete_phis.insert(variable.clone(), v);
         } else if self.blocks[block].predecessors.len() == 1 {
             v = self.read_variable(variable.clone(), self.blocks[block].predecessors[0]);
@@ -211,6 +219,7 @@ impl SSA {
             let phi = Value::Phi { variable: variable.clone(), block, operands: Vec::new() };
             v = self.add_value(phi.clone());
             self.write_variable(variable.clone(), block, v);
+            dbg!(&variable);
             self.add_phi_operands(variable.clone(), v);
         }
 
@@ -253,7 +262,7 @@ impl SSA {
                 same = Some(op);
             }
 
-            same.unwrap_or(UNDEF_ID)
+            same.unwrap_or(self.add_value(Value::UNDEF))
         };
 
         let users = std::mem::take(&mut self.use_chains[phi_id]);
@@ -292,6 +301,7 @@ impl SSA {
     fn seal_block(&mut self, block_id: BlockId) {
         let incomplete_phis = std::mem::take(&mut self.blocks[block_id].incomplete_phis);
         for (variable, phi) in incomplete_phis {
+            dbg!(&variable);
             self.add_phi_operands(variable, phi);
         }
 
@@ -313,7 +323,8 @@ impl SSA {
                 }
 
                 self.blocks[b].filled = true;
-                self.blocks[b].sealed = true;
+                self.seal_block(b);
+                // self.blocks[b].sealed = true;
             }
             Statement::ExpressionStatement(expr) => { self.expr(expr); },
             Statement::VariableDeclaration {
@@ -322,7 +333,7 @@ impl SSA {
                 initial_value, 
                 ..
             } => {
-                let val = initial_value.map_or(UNDEF_ID, |e| self.expr(e));
+                let val = initial_value.map_or(self.add_value(Value::UNDEF), |e| self.expr(e));
                 self.write_variable(identifier, self.curr_block_id - 1, val);
             }
             Statement::FunctionDeclaration { 
@@ -341,7 +352,8 @@ impl SSA {
                 };
 
                 self.blocks[entry].filled = true;
-                self.blocks[entry].sealed = true;
+                self.seal_block(entry);
+                // self.blocks[entry].sealed = true;
                 self.statement(*body, "function body");
             }
             Statement::WhileStatement { 
@@ -354,7 +366,8 @@ impl SSA {
 
                 self.statement(*block, "while body"); 
                 self.blocks[entry].predecessors.push(self.curr_block_id - 1); // loop to while header
-                self.blocks[entry].sealed = true; // we made our loop, thats our last pred
+                self.seal_block(entry);
+                // self.blocks[entry].sealed = true; // we made our loop, thats our last pred
 
                 // we need the next block to attach the entry
                 self.pred = Some(entry);
@@ -368,12 +381,14 @@ impl SSA {
                 self.expr(condition);
 
                 self.blocks[entry].filled = true;
-                self.blocks[entry].sealed = true;
+                self.seal_block(entry);
+                // self.blocks[entry].sealed = true;
 
                 self.statement(*block, "then block"); // then
                 let then_b = self.pred.unwrap();
                 self.blocks[then_b].filled = true;
-                self.blocks[then_b].sealed = true;
+                self.seal_block(then_b);
+                // self.blocks[then_b].sealed = true;
 
                 let merge_b = self.add_block(Block::new(None, "if merge"));
 
@@ -382,7 +397,8 @@ impl SSA {
                     self.statement(*alt_b, "else block");
                     let else_b = self.pred.unwrap();
                     self.blocks[else_b].filled = true;
-                    self.blocks[else_b].sealed = true;
+                    self.seal_block(else_b);
+                    // self.blocks[else_b].sealed = true;
 
                     // create the edge between else and merge
                     self.blocks[else_b].successors.push(merge_b);
@@ -390,7 +406,8 @@ impl SSA {
                 }
 
                 self.blocks[merge_b].filled = true;
-                self.blocks[merge_b].sealed = true;
+                self.seal_block(merge_b);
+                // self.blocks[merge_b].sealed = true;
 
                 self.pred = Some(merge_b);
             }
@@ -448,7 +465,9 @@ impl SSA {
                 let new_lhs = self.expr(*lhs);
                 let new_rhs = self.expr(*rhs);
                 let val = Value::Binary { op, lhs: new_lhs, rhs: new_rhs };
-                self.add_value(val)
+                let id = self.add_value(val);
+                self.blocks[self.pred.unwrap()].instructions.push(id);
+                return id;
             }
             parser::Expression::Unary { 
                 operator, 
@@ -462,7 +481,9 @@ impl SSA {
 
                 let new_member = self.expr(*member);
                 let val = Value::Unary { op, member: new_member };
-                self.add_value(val)
+                let id = self.add_value(val);
+                self.blocks[self.pred.unwrap()].instructions.push(id);
+                return id;
             }
             parser::Expression::Identifier(name) => {
                 self.read_variable(name, self.pred.unwrap())
@@ -500,13 +521,60 @@ impl SSA {
         }
     }
 
+    fn print_instruction(&self, inst: ValueId, mut prev_phis: Vec<ValueId>) {
+        match &self.values[inst] {
+            Value::Int(v) => print!("{}", v),
+            Value::Float(v) => print!("{}", v),
+            Value::Bool(v) => print!("{}", v),
+            Value::Char(v) => print!("{}", v),
+            Value::String(v) => print!("{}", v),
+            Value::Binary { op, lhs, rhs } => {
+                print!("(");
+                self.print_instruction(*lhs, prev_phis.clone());
+                print!(" {:?} ", op);
+                self.print_instruction(*rhs, prev_phis);
+                print!(")");
+            }
+            Value::Unary { op, member } => {
+                print!("({:?} ", op);
+                self.print_instruction(*member, prev_phis);
+                print!(")");
+            }
+            Value::GetElmPtr { base, index, size } => unimplemented!(),
+            Value::Load(_) => unimplemented!(),
+            Value::Store { address, value } => unimplemented!(),
+            Value::Call { name, args } => unimplemented!(),
+            Value::Jump(_) => unimplemented!(),
+            Value::Phi { variable, block, operands } => {
+                print!("phi(");
+                for (i, op) in operands.iter().enumerate() {
+                    if prev_phis.contains(op) { print!("ITSELF") }
+                    else { 
+                        prev_phis.push(*op);
+                        self.print_instruction(*op, prev_phis.clone()); 
+                    }
+                    if i != operands.len() - 1 { print!(", ") };
+                }
+                print!(")");
+            }
+            Value::UNDEF => print!("UNDEF"),
+            Value::Parameter { index, t } => {
+                print!("param: ");
+                self.print_instruction(*index, prev_phis);
+            }
+        }
+    }
+
     pub fn print_blocks(&self) {
         for (i, block) in self.blocks.iter().enumerate(){
             println!("{}: {}", i, block.name);
-            println!("    current defs:");
-            block.current_definitions.iter().for_each(|(key, val)| 
-                println!("        {}: {:?}", key, self.values[val.clone()])
-            );
+            println!("    instructions:");
+            for inst in &block.instructions {
+                print!("\t");
+                self.print_instruction(*inst, Vec::new());
+                println!("");
+            }
+
             println!("    successors: {:?}", block.successors);
             println!("    predecessors: {:?}", block.predecessors);
             println!("");
