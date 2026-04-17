@@ -9,6 +9,11 @@ pub fn main() void {
 		a -= 1;
 	}
 
+	let e = 3;
+	let f = 4;
+	let g = e + f * 3;
+	let h = e + 9;
+
 	let i = 0;
 	while i < 3 {
 		a += 2;
@@ -16,5 +21,4 @@ pub fn main() void {
 	}
 
 	let c = a;
-
 }

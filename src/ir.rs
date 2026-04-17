@@ -208,10 +208,8 @@ impl SSA {
     fn read_variable_recursive(&mut self, variable: String, block: BlockId) -> ValueId {
         let v: ValueId;
         if !self.blocks[block].sealed {
-            dbg!(&self.curr_val_id);
             let phi = Value::Phi { variable: variable.clone(), block, operands: Vec::new() };
             v = self.add_value(phi);
-            dbg!(&variable, v, &self.values[v]);
             self.blocks[block].incomplete_phis.insert(variable.clone(), v);
         } else if self.blocks[block].predecessors.len() == 1 {
             v = self.read_variable(variable.clone(), self.blocks[block].predecessors[0]);
@@ -219,7 +217,6 @@ impl SSA {
             let phi = Value::Phi { variable: variable.clone(), block, operands: Vec::new() };
             v = self.add_value(phi.clone());
             self.write_variable(variable.clone(), block, v);
-            dbg!(&variable);
             self.add_phi_operands(variable.clone(), v);
         }
 
@@ -231,7 +228,6 @@ impl SSA {
         let block_id = match &self.values[phi_id] {
             Value::Phi { block, .. } => *block,
             _ => {
-                dbg!(&self.values[phi_id]);
                 panic!("internal error: can not call ir::SSA::add_phi_operands() without a phi variant");
             }
         };
@@ -254,7 +250,7 @@ impl SSA {
 
     fn remove_trivial_phi(&mut self, phi_id: ValueId) -> ValueId {
         let same = {
-            let Value::Phi { operands, ..} = &self.values[phi_id] else { return phi_id };
+            let Value::Phi { operands, ..} = &self.values[phi_id] else { panic!("internal error: can not call remove_trivial_phi without phi node") };
             let mut same: Option<ValueId> = None;
             for &op in operands {
                 if Some(op) == same || op == phi_id { continue };
@@ -265,6 +261,7 @@ impl SSA {
             same.unwrap_or(self.add_value(Value::UNDEF))
         };
 
+        dbg!(&self.use_chains);
         let users = std::mem::take(&mut self.use_chains[phi_id]);
         for user_id in users {
             if user_id == phi_id { continue }
@@ -279,10 +276,13 @@ impl SSA {
     }
 
     fn reroute(&mut self, user_id: ValueId, old: ValueId, new: ValueId) {
+        dbg!(&self.values[user_id]);
         match &mut self.values[user_id] {
             Value::Binary { lhs, rhs, ..} => {
                 if *lhs == old { *lhs = new }
                 if *rhs == old { *rhs = new }
+                dbg!(*lhs);
+                dbg!(*rhs);
             },
             Value::Unary { member, .. } => {
                 if *member == old { *member = new }
@@ -301,7 +301,6 @@ impl SSA {
     fn seal_block(&mut self, block_id: BlockId) {
         let incomplete_phis = std::mem::take(&mut self.blocks[block_id].incomplete_phis);
         for (variable, phi) in incomplete_phis {
-            dbg!(&variable);
             self.add_phi_operands(variable, phi);
         }
 
