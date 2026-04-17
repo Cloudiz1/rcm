@@ -466,6 +466,9 @@ impl SSA {
                 let val = Value::Binary { op, lhs: new_lhs, rhs: new_rhs };
                 let id = self.add_value(val);
                 self.blocks[self.pred.unwrap()].instructions.push(id);
+                // TODO: this can lead to duplicate use chains because of add_value()
+                self.add_use(new_lhs, id);
+                self.add_use(new_rhs, id);
                 return id;
             }
             parser::Expression::Unary { 
@@ -482,6 +485,7 @@ impl SSA {
                 let val = Value::Unary { op, member: new_member };
                 let id = self.add_value(val);
                 self.blocks[self.pred.unwrap()].instructions.push(id);
+                self.add_use(new_member, id);
                 return id;
             }
             parser::Expression::Identifier(name) => {
