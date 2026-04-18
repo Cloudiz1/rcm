@@ -147,7 +147,7 @@ pub struct SSA {
     use_chains: Vec<Vec<ValueId>>, // for removing trivial phis
     types: Vec<parser::Type>, // uses ValueId
 
-    // track the current id for arenas
+    // track the current id for arrays
     curr_val_id: ValueId,
     curr_block_id: ValueId,
     pred: Option<BlockId>,
