@@ -147,7 +147,6 @@ pub struct SSA {
     use_chains: Vec<Vec<ValueId>>, // for removing trivial phis
     types: Vec<parser::Type>, // uses ValueId
 
-    // track the current id for arenas
     curr_val_id: ValueId,
     curr_block_id: ValueId,
     pred: Option<BlockId>,
@@ -227,9 +226,7 @@ impl SSA {
     fn add_phi_operands(&mut self, variable: String, phi_id: ValueId) -> ValueId {
         let block_id = match &self.values[phi_id] {
             Value::Phi { block, .. } => *block,
-            _ => {
-                panic!("internal error: can not call ir::SSA::add_phi_operands() without a phi variant");
-            }
+            _ => panic!("internal error: can not call ir::SSA::add_phi_operands() without a phi variant"),
         };
 
         let preds = self.blocks[block_id].predecessors.to_owned();
@@ -241,8 +238,9 @@ impl SSA {
             new_operands.push(operand);
         }
 
+        debug_assert!(new_operands.len() <= self.blocks[block_id].predecessors.len());
         if let Value::Phi { operands, .. } = &mut self.values[phi_id] {
-            *operands = new_operands.clone();
+            *operands = new_operands;
         }
 
         return self.remove_trivial_phi(phi_id);
@@ -252,37 +250,37 @@ impl SSA {
         let same = {
             let Value::Phi { operands, ..} = &self.values[phi_id] else { panic!("internal error: can not call remove_trivial_phi without phi node") };
             let mut same: Option<ValueId> = None;
+            // TODO: somehow these operands arent updated
             for &op in operands {
-                if Some(op) == same || op == phi_id { continue };
-                if same.is_some() { return phi_id };
+                if Some(op) == same || op == phi_id { continue }; // unique or self
+                if same.is_some() { return phi_id }; // two values, not trivial
                 same = Some(op);
             }
 
             same.unwrap_or(self.add_value(Value::UNDEF))
         };
 
-        dbg!(&self.use_chains);
         let users = std::mem::take(&mut self.use_chains[phi_id]);
-        for user_id in users {
-            if user_id == phi_id { continue }
-            self.reroute(user_id, phi_id, same);
+        for user in users {
+            dbg!(&self.values[user]);
+            if user == phi_id { continue }
+            self.reroute(user, phi_id, same);
+            dbg!(&self.values[user]);
 
-            if let Value::Phi { .. } = self.values[user_id] {
-                self.remove_trivial_phi(user_id);
+            if let Value::Phi { .. } = self.values[user] {
+                self.remove_trivial_phi(user);
             }
         }
 
         return same;
     }
 
-    fn reroute(&mut self, user_id: ValueId, old: ValueId, new: ValueId) {
-        dbg!(&self.values[user_id]);
-        match &mut self.values[user_id] {
+    fn reroute(&mut self, user: ValueId, old: ValueId, new: ValueId) {
+        dbg!(&self.values[old], &self.values[new]);
+        match &mut self.values[user] {
             Value::Binary { lhs, rhs, ..} => {
                 if *lhs == old { *lhs = new }
                 if *rhs == old { *rhs = new }
-                dbg!(*lhs);
-                dbg!(*rhs);
             },
             Value::Unary { member, .. } => {
                 if *member == old { *member = new }
@@ -295,7 +293,13 @@ impl SSA {
             _ => unimplemented!("reroute is still a WIP"),
         }
 
-        self.add_use(new, user_id);
+        let Value::Phi { variable, block, .. } = &self.values[old] else {
+            unreachable!();
+        };
+
+        self.write_variable(variable.clone(), block.clone(), new);
+        self.use_chains[old].retain(|&x| x != user);
+        self.add_use(new, user);
     }
 
     fn seal_block(&mut self, block_id: BlockId) {
@@ -303,7 +307,7 @@ impl SSA {
         for (variable, phi) in incomplete_phis {
             self.add_phi_operands(variable, phi);
         }
-
+        
         self.blocks[block_id].sealed = true;
     }
 }
@@ -323,7 +327,6 @@ impl SSA {
 
                 self.blocks[b].filled = true;
                 self.seal_block(b);
-                // self.blocks[b].sealed = true;
             }
             Statement::ExpressionStatement(expr) => { self.expr(expr); },
             Statement::VariableDeclaration {
@@ -364,9 +367,9 @@ impl SSA {
                 self.blocks[entry].filled = true; // NOT SEALED
 
                 self.statement(*block, "while body"); 
-                self.blocks[entry].predecessors.push(self.curr_block_id - 1); // loop to while header
+                self.blocks[entry].predecessors.push(self.pred.unwrap()); // loop to while header
+                self.blocks[self.pred.unwrap()].successors.push(entry); // loop to while header
                 self.seal_block(entry);
-                // self.blocks[entry].sealed = true; // we made our loop, thats our last pred
 
                 // we need the next block to attach the entry
                 self.pred = Some(entry);
@@ -381,15 +384,13 @@ impl SSA {
 
                 self.blocks[entry].filled = true;
                 self.seal_block(entry);
-                // self.blocks[entry].sealed = true;
 
                 self.statement(*block, "then block"); // then
                 let then_b = self.pred.unwrap();
                 self.blocks[then_b].filled = true;
                 self.seal_block(then_b);
-                // self.blocks[then_b].sealed = true;
 
-                let merge_b = self.add_block(Block::new(None, "if merge"));
+                let merge_b = self.add_block(Block::new(Some(then_b), "if merge"));
 
                 if let Some(alt_b) = alt {
                     self.pred = Some(entry); 
@@ -397,7 +398,6 @@ impl SSA {
                     let else_b = self.pred.unwrap();
                     self.blocks[else_b].filled = true;
                     self.seal_block(else_b);
-                    // self.blocks[else_b].sealed = true;
 
                     // create the edge between else and merge
                     self.blocks[else_b].successors.push(merge_b);
@@ -406,7 +406,6 @@ impl SSA {
 
                 self.blocks[merge_b].filled = true;
                 self.seal_block(merge_b);
-                // self.blocks[merge_b].sealed = true;
 
                 self.pred = Some(merge_b);
             }
