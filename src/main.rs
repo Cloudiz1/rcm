@@ -37,5 +37,6 @@ fn main() {
 
     let mut ssa = ir::SSA::new();
     ssa.ir_gen(ast);
-    ssa.print_blocks(false);
+    ssa.print_ids();
+    ssa.print_blocks();
 }

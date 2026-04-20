@@ -4,5 +4,5 @@ fn main() void {
 		i += 1;
 	}
 
-	let foo = i + 2;
+	let foo = i * 2;
 }

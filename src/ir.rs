@@ -168,6 +168,7 @@ impl SSA {
     }
 
     fn add_use(&mut self, operand: ValueId, user: ValueId) {
+        if self.use_chains[operand].contains(&user) { return; }
         self.use_chains[operand].push(user)
     }
 
@@ -365,6 +366,8 @@ impl SSA {
 
                 // we need the next block to attach the entry
                 self.pred = Some(entry);
+                let post = self.add_block(Block::new(Some(entry), "use"));
+                self.seal_block(post);
             }
             Statement::IfStatement { 
                 condition, 
@@ -514,6 +517,18 @@ impl SSA {
             self.statement(s, "entry");
         }
     }
+}
+
+impl SSA {
+    pub fn print_ids(&self) {
+        println!("///// IDS /////");
+        for (i, val) in self.values.iter().enumerate() {
+            println!("{}: {:?}: ", i, *val);
+        }
+        println!("///////////////");
+        println!("");
+    }
+    
 
     fn print_instruction(&self, inst: ValueId, mut prev_phis: Vec<ValueId>) {
         match &self.values[inst] {
@@ -542,7 +557,7 @@ impl SSA {
             Value::Phi { variable, block, operands } => {
                 print!("phi(");
                 for (i, op) in operands.iter().enumerate() {
-                    if prev_phis.contains(op) { print!("ITSELF") }
+                    if prev_phis.contains(op) { print!("<{}>", *op) }
                     else { 
                         prev_phis.push(*op);
                         self.print_instruction(*op, prev_phis.clone()); 
@@ -559,27 +574,27 @@ impl SSA {
         }
     }
 
-    pub fn print_blocks(&self, cdef: bool) {
+    pub fn print_blocks(&self) {
         for (i, block) in self.blocks.iter().enumerate(){
             println!("{}: {}", i, block.name);
             println!("    instructions:");
             for inst in &block.instructions {
                 print!("\t");
-                self.print_instruction(*inst, Vec::new());
+                self.print_instruction(*inst, Vec::from(&[*inst]));
                 println!("");
             }
 
             println!("    successors: {:?}", block.successors);
             println!("    predecessors: {:?}", block.predecessors);
 
-            if cdef {
-                println!("    cdefs:");
-                for (var, val) in &block.current_definitions {
-                    print!("    {}: ", var);
-                    self.print_instruction(*val, Vec::new());
-                    println!("");
-                }
-            }
+            // if cdef {
+            //     println!("    cdefs:");
+            //     for (var, val) in &block.current_definitions {
+            //         print!("    {}: ", var);
+            //         self.print_instruction(*val, Vec::from(&[*val]));
+            //         println!("");
+            //     }
+            // }
 
             println!("");
         }
