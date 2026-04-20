@@ -205,7 +205,7 @@ impl SSA {
     }
 
     fn read_variable_recursive(&mut self, variable: String, block: BlockId) -> ValueId {
-        let v: ValueId;
+        let mut v: ValueId;
         if !self.blocks[block].sealed {
             let phi = Value::Phi { variable: variable.clone(), block, operands: Vec::new() };
             v = self.add_value(phi);
@@ -214,9 +214,9 @@ impl SSA {
             v = self.read_variable(variable.clone(), self.blocks[block].predecessors[0]);
         } else {
             let phi = Value::Phi { variable: variable.clone(), block, operands: Vec::new() };
-            v = self.add_value(phi.clone());
+            v = self.add_value(phi);
             self.write_variable(variable.clone(), block, v);
-            self.add_phi_operands(variable.clone(), v);
+            v = self.add_phi_operands(variable.clone(), v);
         }
 
         self.write_variable(variable, block, v);
@@ -250,7 +250,6 @@ impl SSA {
         let same = {
             let Value::Phi { operands, ..} = &self.values[phi_id] else { panic!("internal error: can not call remove_trivial_phi without phi node") };
             let mut same: Option<ValueId> = None;
-            // TODO: somehow these operands arent updated
             for &op in operands {
                 if Some(op) == same || op == phi_id { continue }; // unique or self
                 if same.is_some() { return phi_id }; // two values, not trivial
@@ -262,10 +261,8 @@ impl SSA {
 
         let users = std::mem::take(&mut self.use_chains[phi_id]);
         for user in users {
-            dbg!(&self.values[user]);
             if user == phi_id { continue }
             self.reroute(user, phi_id, same);
-            dbg!(&self.values[user]);
 
             if let Value::Phi { .. } = self.values[user] {
                 self.remove_trivial_phi(user);
@@ -276,7 +273,6 @@ impl SSA {
     }
 
     fn reroute(&mut self, user: ValueId, old: ValueId, new: ValueId) {
-        dbg!(&self.values[old], &self.values[new]);
         match &mut self.values[user] {
             Value::Binary { lhs, rhs, ..} => {
                 if *lhs == old { *lhs = new }
@@ -293,11 +289,7 @@ impl SSA {
             _ => unimplemented!("reroute is still a WIP"),
         }
 
-        let Value::Phi { variable, block, .. } = &self.values[old] else {
-            unreachable!();
-        };
-
-        self.write_variable(variable.clone(), block.clone(), new);
+        self.values_table.remove(&self.values[old]);
         self.use_chains[old].retain(|&x| x != user);
         self.add_use(new, user);
     }
@@ -320,13 +312,13 @@ impl SSA {
             Statement::ParseError => panic!("internal error: how did a ParseError even make its way to IR gen"),
             Statement::Block(stmts) => {
                 let b = self.add_block(Block::new(self.pred, block_name));
+                self.seal_block(b);
 
                 for s in stmts {
                     self.statement(*s, "Basic Block");
                 }
 
                 self.blocks[b].filled = true;
-                self.seal_block(b);
             }
             Statement::ExpressionStatement(expr) => { self.expr(expr); },
             Statement::VariableDeclaration {
@@ -346,6 +338,8 @@ impl SSA {
                 public 
             } => {
                 let entry = self.add_block(Block::new(self.pred, "function entry")); // adds param to entry block
+                self.seal_block(entry);
+
                 for (i, p) in parameters.into_iter().enumerate() {
                     let parser::Statement::Parameter { name, t } = *p else { unreachable!() };
                     let param = Value::Parameter { index: i, t };
@@ -354,8 +348,6 @@ impl SSA {
                 };
 
                 self.blocks[entry].filled = true;
-                self.seal_block(entry);
-                // self.blocks[entry].sealed = true;
                 self.statement(*body, "function body");
             }
             Statement::WhileStatement { 
@@ -380,15 +372,15 @@ impl SSA {
                 alt 
             } => {
                 let entry = self.add_block(Block::new(self.pred, "if entry"));
-                self.expr(condition);
-
-                self.blocks[entry].filled = true;
                 self.seal_block(entry);
+
+                self.expr(condition);
+                self.blocks[entry].filled = true;
 
                 self.statement(*block, "then block"); // then
                 let then_b = self.pred.unwrap();
                 self.blocks[then_b].filled = true;
-                self.seal_block(then_b);
+                // self.seal_block(then_b);
 
                 let merge_b = self.add_block(Block::new(Some(then_b), "if merge"));
 
@@ -451,10 +443,10 @@ impl SSA {
                     lexer::Token::DoubleLeftCaret => BinaryOp::LShift,
                     lexer::Token::DoubleRightCaret => BinaryOp::RShift,
                     lexer::Token::Bang => BinaryOp::LNot,
-                    lexer::Token::LeftCaret => BinaryOp::GT,
-                    lexer::Token::LeftCaretEqual => BinaryOp::GTE,
-                    lexer::Token::RightCaret => BinaryOp::LT,
-                    lexer::Token::RightCaretEqual => BinaryOp::LTE,
+                    lexer::Token::LeftCaret => BinaryOp::LT,
+                    lexer::Token::LeftCaretEqual => BinaryOp::LTE,
+                    lexer::Token::RightCaret => BinaryOp::GT,
+                    lexer::Token::RightCaretEqual => BinaryOp::GTE,
                     lexer::Token::EqualEqual => BinaryOp::Eq,
                     lexer::Token::BangEqual => BinaryOp::NotEq,
                     _ => panic!("internal error: invalid operator"),
@@ -567,7 +559,7 @@ impl SSA {
         }
     }
 
-    pub fn print_blocks(&self) {
+    pub fn print_blocks(&self, cdef: bool) {
         for (i, block) in self.blocks.iter().enumerate(){
             println!("{}: {}", i, block.name);
             println!("    instructions:");
@@ -579,6 +571,16 @@ impl SSA {
 
             println!("    successors: {:?}", block.successors);
             println!("    predecessors: {:?}", block.predecessors);
+
+            if cdef {
+                println!("    cdefs:");
+                for (var, val) in &block.current_definitions {
+                    print!("    {}: ", var);
+                    self.print_instruction(*val, Vec::new());
+                    println!("");
+                }
+            }
+
             println!("");
         }
     }
