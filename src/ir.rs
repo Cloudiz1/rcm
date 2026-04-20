@@ -28,23 +28,6 @@ impl std::fmt::Display for HashableFloat {
     }
 }
 
-impl Block {
-    fn new(pred: Option<BlockId>, name: &'static str) -> Self {
-        Self {
-            name,
-            current_definitions: HashMap::new(),
-            incomplete_phis: HashMap::new(),
-            instructions: Vec::new(),
-
-            filled: false,
-            sealed: false,
-
-            predecessors: pred.map_or(Vec::new(), |p| Vec::from([p])),
-            successors: Vec::new(),
-        }
-    }
-}
-
 #[derive(Clone, Hash, Eq, PartialEq, Debug)]
 pub enum BinaryOp {
     Add,
@@ -104,13 +87,16 @@ pub enum Value {
     },
     Jump(BlockId),
     Phi {
-        variable: String,
+        // variable: String,
         block: BlockId,
         operands: Vec<ValueId>,
     },
     Parameter {
         index: usize,
         t: parser::Type,
+    },
+    Ret {
+        value: ValueId,
     },
     UNDEF,
 }
@@ -140,6 +126,23 @@ pub struct Block {
     pub successors: Vec<BlockId>
 }
 
+impl Block {
+    fn new(pred: Option<BlockId>, name: &'static str) -> Self {
+        Self {
+            name,
+            current_definitions: HashMap::new(),
+            incomplete_phis: HashMap::new(),
+            instructions: Vec::new(),
+
+            filled: false,
+            sealed: false,
+
+            predecessors: pred.map_or(Vec::new(), |p| Vec::from([p])),
+            successors: Vec::new(),
+        }
+    }
+}
+
 pub struct SSA {
     blocks: Vec<Block>,
     values: Vec<Value>, 
@@ -150,6 +153,9 @@ pub struct SSA {
     curr_val_id: ValueId,
     curr_block_id: ValueId,
     pred: Option<BlockId>,
+
+    exit_block: BlockId,
+    returns: Vec<ValueId>,
 }
 
 impl SSA {
@@ -164,6 +170,9 @@ impl SSA {
             curr_val_id: 0,
             curr_block_id: 0,
             pred: None,
+
+            exit_block: 0,
+            returns: Vec::new(),
         }
     }
 
@@ -173,8 +182,8 @@ impl SSA {
     }
 
     fn add_block(&mut self, block: Block) -> BlockId {
-        if let Some(p) = self.pred {
-            self.blocks[p].successors.push(self.curr_block_id);
+        if !block.predecessors.is_empty() {
+            self.blocks[block.predecessors[0]].successors.push(self.curr_block_id);
         }
 
         self.pred = Some(self.curr_block_id);
@@ -208,13 +217,13 @@ impl SSA {
     fn read_variable_recursive(&mut self, variable: String, block: BlockId) -> ValueId {
         let mut v: ValueId;
         if !self.blocks[block].sealed {
-            let phi = Value::Phi { variable: variable.clone(), block, operands: Vec::new() };
+            let phi = Value::Phi { block, operands: Vec::new() };
             v = self.add_value(phi);
             self.blocks[block].incomplete_phis.insert(variable.clone(), v);
         } else if self.blocks[block].predecessors.len() == 1 {
             v = self.read_variable(variable.clone(), self.blocks[block].predecessors[0]);
         } else {
-            let phi = Value::Phi { variable: variable.clone(), block, operands: Vec::new() };
+            let phi = Value::Phi { block, operands: Vec::new() };
             v = self.add_value(phi);
             self.write_variable(variable.clone(), block, v);
             v = self.add_phi_operands(variable.clone(), v);
@@ -338,6 +347,8 @@ impl SSA {
                 body, 
                 public 
             } => {
+                self.exit_block = self.add_block(Block::new(None, "exit block"));
+
                 let entry = self.add_block(Block::new(self.pred, "function entry")); // adds param to entry block
                 self.seal_block(entry);
 
@@ -350,11 +361,24 @@ impl SSA {
 
                 self.blocks[entry].filled = true;
                 self.statement(*body, "function body");
+
+                // turns branched returns into a single one
+                let returns = std::mem::take(&mut self.returns);
+                if returns.len() == 1 {
+                    let ret = self.add_value(Value::Ret { value: returns[0] });
+                    self.blocks[self.exit_block].instructions.push(ret);
+                } else {
+                    let operands = returns.into_iter().collect();
+                    let phi = self.add_value(Value::Phi { block: self.pred.unwrap(), operands });
+                    let ret = self.add_value(Value::Ret { value: phi });
+                    self.blocks[self.exit_block].instructions.push(ret);
+                }
             }
             Statement::WhileStatement { 
                 condition, 
                 block 
             } => {
+
                 let entry = self.add_block(Block::new(self.pred, "while entry"));
                 self.expr(condition);
                 self.blocks[entry].filled = true; // NOT SEALED
@@ -409,8 +433,15 @@ impl SSA {
             Statement::StructDeclaration { .. } => return,
             Statement::Member { .. } => return,
             Statement::Return { value } => {
-                // TODO: read variable and return!
-                return;
+                if let Some(val) = value {
+                    let ret = self.expr(val);
+                    self.returns.push(ret);
+                }
+
+                let jump = self.add_value(Value::Jump(self.exit_block));
+                self.blocks[self.exit_block].predecessors.push(self.pred.unwrap());
+                self.blocks[self.pred.unwrap()].successors.push(self.exit_block);
+                self.blocks[self.pred.unwrap()].instructions.push(jump);
             }
         }
     }
@@ -460,7 +491,7 @@ impl SSA {
                 let val = Value::Binary { op, lhs: new_lhs, rhs: new_rhs };
                 let id = self.add_value(val);
                 self.blocks[self.pred.unwrap()].instructions.push(id);
-                // TODO: this can lead to duplicate use chains because of add_value()
+
                 self.add_use(new_lhs, id);
                 self.add_use(new_rhs, id);
                 return id;
@@ -515,6 +546,7 @@ impl SSA {
     pub fn ir_gen(&mut self, statements: Vec<parser::Statement>) {
         for s in statements {
             self.statement(s, "entry");
+            self.pred = None;
         }
     }
 }
@@ -528,7 +560,6 @@ impl SSA {
         println!("///////////////");
         println!("");
     }
-    
 
     fn print_instruction(&self, inst: ValueId, mut prev_phis: Vec<ValueId>) {
         match &self.values[inst] {
@@ -553,8 +584,8 @@ impl SSA {
             Value::Load(_) => unimplemented!(),
             Value::Store { address, value } => unimplemented!(),
             Value::Call { name, args } => unimplemented!(),
-            Value::Jump(_) => unimplemented!(),
-            Value::Phi { variable, block, operands } => {
+            Value::Jump(block) => print!("JMP <{}>: {}", block, self.blocks[*block].name),
+            Value::Phi { block, operands } => {
                 print!("phi(");
                 for (i, op) in operands.iter().enumerate() {
                     if prev_phis.contains(op) { print!("<{}>", *op) }
@@ -571,6 +602,10 @@ impl SSA {
                 print!("param: ");
                 self.print_instruction(*index, prev_phis);
             }
+            Value::Ret { value } => {
+                print!("ret ");
+                self.print_instruction(*value, prev_phis);
+            }
         }
     }
 
@@ -580,22 +615,11 @@ impl SSA {
             println!("    instructions:");
             for inst in &block.instructions {
                 print!("\t");
-                self.print_instruction(*inst, Vec::from(&[*inst]));
+                self.print_instruction(*inst, Vec::new());
                 println!("");
             }
-
             println!("    successors: {:?}", block.successors);
             println!("    predecessors: {:?}", block.predecessors);
-
-            // if cdef {
-            //     println!("    cdefs:");
-            //     for (var, val) in &block.current_definitions {
-            //         print!("    {}: ", var);
-            //         self.print_instruction(*val, Vec::from(&[*val]));
-            //         println!("");
-            //     }
-            // }
-
             println!("");
         }
     }
