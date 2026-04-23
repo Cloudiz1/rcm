@@ -71,6 +71,13 @@ pub enum Value {
         op: UnaryOp,
         member: ValueId,
     },
+    Array {
+        elements: Vec<ValueId>,
+    },
+    ArrayAccess {
+        array: ValueId,
+        index: ValueId,
+    },
     GetElmPtr {
         base: ValueId,
         index: ValueId,
@@ -352,7 +359,7 @@ impl SSA {
             } => {
                 self.exit_block = self.add_block(Block::new(None, "exit block"));
 
-                let entry = self.add_block(Block::new(self.pred, "function entry")); // adds param to entry block
+                let entry = self.add_block(Block::new(None, "function entry")); // adds param to entry block
                 self.seal_block(entry);
 
                 for (i, p) in parameters.into_iter().enumerate() {
@@ -406,7 +413,7 @@ impl SSA {
                 self.seal_block(entry);
 
                 let cond = self.expr(condition);
-                self.blocks[self.pred.unwrap()].instructions.pop(); // rewrites using the branch value
+                // self.blocks[self.pred.unwrap()].instructions.pop(); // rewrites using the branch value
                 let br = self.add_value(Value::Branch { cond });
                 self.blocks[self.pred.unwrap()].instructions.push(br);
                 self.blocks[entry].filled = true;
@@ -469,7 +476,8 @@ impl SSA {
                     lexer::Token::Pipe,
                     lexer::Token::Caret
                 ].contains(&operator) {
-                    std::mem::swap(&mut lhs, &mut rhs);
+                    // TODO: this should be ordered not just swapped????
+                    // std::mem::swap(&mut lhs, &mut rhs);
                 }
 
                 let op = match operator {
@@ -496,7 +504,7 @@ impl SSA {
                 let new_rhs = self.expr(*rhs);
                 let val = Value::Binary { op, lhs: new_lhs, rhs: new_rhs };
                 let id = self.add_value(val);
-                self.blocks[self.pred.unwrap()].instructions.push(id);
+                // self.blocks[self.pred.unwrap()].instructions.push(id);
 
                 self.add_use(new_lhs, id);
                 self.add_use(new_rhs, id);
@@ -535,13 +543,28 @@ impl SSA {
             }
             parser::Expression::FunctionCall {
                 identifier, args
-            } => todo!(),
-            parser::Expression::ArrayAccess {
-                identifier, index 
-            } => todo!(),
+            } => {
+                let name = expr_to_string(*identifier);
+                let args = args.iter().map(|x| self.expr(*x.clone())).collect::<Vec<ValueId>>();
+                let call = self.add_value(Value::Call { name, args });
+                self.blocks[self.pred.unwrap()].instructions.push(call);
+                return call;
+                // let call = self.add_value(Values)
+            },
             parser::Expression::ArrayConstructor {
                 values
-            } => todo!(),
+            } => {
+                let elements = values.iter().map(|x| self.expr(*x.clone())).collect::<Vec<ValueId>>();
+                return self.add_value(Value::Array { elements });
+            },
+            parser::Expression::ArrayAccess {
+                identifier, index 
+            } => {
+                let array = self.read_variable(expr_to_string(*identifier), self.pred.unwrap());
+                let index_expr = self.expr(*index);
+                let element = self.add_value(Value::ArrayAccess { array, index: index_expr });
+                return element;
+            },
             parser::Expression::StructConstructor {
                 identifier, members
             } => todo!(),
@@ -586,10 +609,31 @@ impl SSA {
                 self.print_instruction(*member, prev_phis);
                 print!(")");
             }
+            Value::Array { elements } => {
+                print!("[");
+                for (i, e) in elements.iter().enumerate() {
+                    self.print_instruction(*e, prev_phis.clone());
+                    if i != elements.len() - 1 { print!(", ") }
+                }
+                print!("]");
+            }
+            Value::ArrayAccess { array, index } => {
+                print!("Array<{array}>[");
+                self.print_instruction(*index, prev_phis);
+                print!("]");
+            }
             Value::GetElmPtr { base, index, size } => unimplemented!(),
             Value::Load(_) => unimplemented!(),
             Value::Store { address, value } => unimplemented!(),
-            Value::Call { name, args } => unimplemented!(),
+            Value::Call { name, args } => {
+                print!("call <{}> (", name);
+                for (i, arg) in args.iter().enumerate() {
+                    self.print_instruction(*arg, prev_phis.clone());
+                    if i != args.len() - 1 { print!(", "); }
+                }
+
+                print!(")");
+            },
             Value::Jump(block) => print!("JMP <{}>: {}", block, self.blocks[*block].name),
             Value::Phi { block, operands } => {
                 print!("phi(");
@@ -605,8 +649,7 @@ impl SSA {
             }
             Value::UNDEF => print!("UNDEF"),
             Value::Parameter { index, t } => {
-                print!("param: ");
-                self.print_instruction(*index, prev_phis);
+                print!("param({})", index);
             }
             Value::Ret { value } => {
                 print!("ret ");
@@ -615,7 +658,7 @@ impl SSA {
             Value::Branch { cond } => {
                 print!("br <");
                 self.print_instruction(*cond, prev_phis);
-                println!(">");
+                print!(">");
             }
         }
     }
