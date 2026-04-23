@@ -85,7 +85,6 @@ pub enum Value {
         name: String,
         args: Vec<ValueId>,
     },
-    Jump(BlockId),
     Phi {
         // variable: String,
         block: BlockId,
@@ -94,6 +93,10 @@ pub enum Value {
     Parameter {
         index: usize,
         t: parser::Type,
+    },
+    Jump(BlockId),
+    Branch {
+        cond: ValueId,
     },
     Ret {
         value: ValueId,
@@ -123,7 +126,7 @@ pub struct Block {
     pub sealed: bool,
 
     pub predecessors: Vec<BlockId>, 
-    pub successors: Vec<BlockId>
+    pub successors: Vec<BlockId>,
 }
 
 impl Block {
@@ -398,16 +401,19 @@ impl SSA {
                 block, 
                 alt 
             } => {
-                let entry = self.add_block(Block::new(self.pred, "if entry"));
+                let entry = self.pred.unwrap();
+                // let entry = self.add_block(Block::new(self.pred, "if entry"));
                 self.seal_block(entry);
 
-                self.expr(condition);
+                let cond = self.expr(condition);
+                self.blocks[self.pred.unwrap()].instructions.pop(); // rewrites using the branch value
+                let br = self.add_value(Value::Branch { cond });
+                self.blocks[self.pred.unwrap()].instructions.push(br);
                 self.blocks[entry].filled = true;
 
                 self.statement(*block, "then block"); // then
                 let then_b = self.pred.unwrap();
                 self.blocks[then_b].filled = true;
-                // self.seal_block(then_b);
 
                 let merge_b = self.add_block(Block::new(Some(then_b), "if merge"));
 
@@ -605,6 +611,11 @@ impl SSA {
             Value::Ret { value } => {
                 print!("ret ");
                 self.print_instruction(*value, prev_phis);
+            }
+            Value::Branch { cond } => {
+                print!("br <");
+                self.print_instruction(*cond, prev_phis);
+                println!(">");
             }
         }
     }
