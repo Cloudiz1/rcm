@@ -1,6 +1,7 @@
 use crate::lexer;
 use crate::parser;
 use crate::analysis;
+use std::any;
 use std::collections::HashMap;
 
 pub type BlockId = usize;
@@ -171,7 +172,7 @@ pub struct SSA {
 
     exit_block: BlockId,
     returns: Vec<ValueId>,
-    // symbols: HashMap<String, analysis::Symbol>,
+    symbols: HashMap<String, analysis::Symbol>,
 }
 
 impl SSA {
@@ -189,7 +190,7 @@ impl SSA {
 
             exit_block: 0,
             returns: Vec::new(),
-            // symbols: globals,
+            symbols: globals,
         }
     }
 
@@ -333,6 +334,36 @@ impl SSA {
 
 // the more 'TAC' like stuff
 impl SSA {
+    /// handles structs and normal variables, instead of just variables
+    fn write_variable_complete(&mut self, identifier: String, val: ValueId) {
+        if matches!(self.values[val], Value::Struct { .. }) {
+            self.struct_assignment(identifier, val);
+        } else {
+            self.write_variable(identifier, self.pred.unwrap(), val);
+        }
+    }
+
+    /// structs need multiple write calls, this function handles that
+    fn struct_assignment(&mut self, variable: String, struct_expr: ValueId) {
+        // take name, say foo
+        // iterate through each member, say foo.x and foo.y
+        // call write variable on them
+        let updates: Vec<(String, usize)> = {
+            let Value::Struct { names, members } = &self.values[struct_expr] else { 
+                unreachable!("internal error: called struct_assignment without a struct") 
+            };
+
+            names.iter().zip(members).map(|(name, member)| {
+                (name.clone(), *member)
+            }).collect()
+        };
+
+        for (name, member) in updates {
+            let var = std::format!("{variable}.{name}");
+            self.write_variable(var, self.pred.unwrap(), member.clone());
+        }
+    }
+
     fn statement(&mut self, stmt: parser::Statement, block_name: &'static str) {
         use parser::Statement;
         match stmt {
@@ -355,13 +386,7 @@ impl SSA {
                 ..
             } => {
                 let val = initial_value.map_or(self.add_value(Value::UNDEF), |e| self.expr(e));
-                if let Value::Struct { members, typedef } = &self.values[val] {
-                    let struct_symbol = self.symbols.get(typedef).unwrap();
-                    for member in members {
-
-                    }
-                }
-                self.write_variable(identifier, self.curr_block_id - 1, val);
+                self.write_variable_complete(identifier, val);
             }
             Statement::FunctionDeclaration { 
                 name, 
@@ -550,12 +575,9 @@ impl SSA {
                 identifier, 
                 value 
             } => {
-                let mut identifier = expr_to_string(*identifier);
+                let identifier = expr_to_string(*identifier);
                 let val = self.expr(*value);
-                // if let Value::Struct{ typedef, members } = &self.values[val] {
-                // }
-                //
-                self.write_variable(identifier, self.pred.unwrap(), val);
+                self.write_variable_complete(identifier, val);
                 return val;
             }
             parser::Expression::FunctionCall {
@@ -585,16 +607,18 @@ impl SSA {
             parser::Expression::StructConstructor {
                 identifier, members
             } => {
-                let members = members.into_iter().map(|x| self.expr(x.val)).collect();
-                return self.add_value(Value::Struct { members });
+                let names = {
+                    let symbol= self.symbols.get(&identifier).unwrap();
+                    let analysis::Symbol::Struct { names, .. } = symbol else { unreachable!() };
+                    names.clone()
+                }; 
 
-                // let members = members.into_iter().map(|x| {
-                //     let name = std::format!("{identifier}.{}", x.identifier);
-                //     dbg!(&name);
-                //     let value = self.expr(x.val);
-                //     self.write_variable(name, self.pred.unwrap(), value);
-                //     value
-                // }).collect();
+                let new_members = names.iter().map(|name| {
+                    let val = members.get(name).unwrap();
+                    self.expr(val.clone())
+                }).collect(); // done in order of names to preserve order of members
+
+                return self.add_value(Value::Struct { names: names.to_vec(), members: new_members })
             },
             _ => todo!(),
         }
@@ -688,7 +712,7 @@ impl SSA {
                 self.print_instruction(*cond, prev_insts);
                 print!(">");
             }
-            Value::Struct { members, typedef} => {
+            Value::Struct { members, names} => {
                 print!("struct{{ ");
                 for (i, member) in members.iter().enumerate() {
                     // TODO: this might lead to recursive printing with pointers :pensive:

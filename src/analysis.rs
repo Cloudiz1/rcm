@@ -21,8 +21,8 @@ pub enum Symbol {
     },
     Struct {
         public: bool,
-        members_arena: Vec<Symbol>,
-        members: HashMap<String, usize>,
+        names: Vec<String>,
+        members: HashMap<String, Symbol>,
         methods: HashMap<String, Symbol>,
         typedef: String,
     },
@@ -110,23 +110,22 @@ fn create_symbol_entry(statement: parser::Statement) -> (String, Symbol) {
             methods, 
             public 
         } => {
-
-            let mut members_arena: Vec<Symbol> = Vec::new();
-            let mut members_table: HashMap<String, usize> = HashMap::new();
-            for (i, member) in members.into_iter().enumerate() {
+            let mut names: Vec<String> = Vec::new();
+            let mut symbol_members: HashMap<String, Symbol> = HashMap::new();
+            for member in members {
                 let (member_name, symbol) = create_symbol_entry(*member);
-                if members_table.contains_key(&member_name) { // no duplicate fields
+                if contains_defintion(&symbol_members, &member_name) {
                     panic!("cannot redefine member {} in struct {}", member_name, name);
                 }
-
-                members_table.insert(member_name, i);
-                members_arena.push(symbol);
+                
+                names.push(member_name.clone());
+                symbol_members.insert(member_name, symbol);
             }
 
             let mut symbol_methods: HashMap<String, Symbol> = HashMap::new();
             for method in methods {
                 let (method_name, symbol) = create_symbol_entry(*method);
-                if members_table.contains_key(&method_name) { // no duplicate methods or fields
+                if contains_defintion(&symbol_members, &method_name) {
                     panic!("cannot redefine method {} in struct {}", method_name, name);
                 }
 
@@ -137,8 +136,8 @@ fn create_symbol_entry(statement: parser::Statement) -> (String, Symbol) {
                 name.clone(),
                 Symbol::Struct { 
                     public, 
-                    members_arena, 
-                    members: members_table,
+                    names,
+                    members: symbol_members, 
                     methods: symbol_methods,
                     typedef: name,
                 }
@@ -318,8 +317,8 @@ impl Analyzer {
 
         let Symbol::Struct { 
             public,
+            names,
             members,
-            members_arena,
             methods,
             typedef,
         } = lhs_symbol else {
@@ -327,7 +326,7 @@ impl Analyzer {
         };
 
         if let Some(member) = members.get(rhs) {
-            return members_arena[*member].clone();
+            return member.clone();
         }
 
         if let Some(method) = methods.get(rhs) {
@@ -477,7 +476,7 @@ impl Analyzer {
                 let symbol = self.get_symbol(identifier, "unrecognized struct");
                 let Symbol::Struct { 
                     public, 
-                    members_arena,
+                    names,
                     members: defined_members, 
                     methods,
                     typedef 
@@ -488,11 +487,10 @@ impl Analyzer {
                 // if the lengths are different, see which one(s) are missing
                 if members.len() != defined_members.len() {
                     let constructed_members = members
-                        .iter()
-                        .map(|x| x.clone().identifier)
+                        .keys()
+                        .map(|x| x.clone())
                         .collect::<Vec<String>>();
 
-                    // TODO: hashmap
                     for member in defined_members.keys() {
                         if !constructed_members.contains(member) {
                             // TODO: collect all the missing ones and make one big error
@@ -501,13 +499,13 @@ impl Analyzer {
                     }
                 }
 
-                for member in members {
-                    let Some(defined_member_symbol) = defined_members.get(&member.identifier) else {
+                for (member_name, member_val) in members {
+                    let Some(defined_member_symbol) = defined_members.get(member_name) else {
                         panic!("unrecognized struct member");
                     };
 
-                    let expected_type = members_arena[*defined_member_symbol].get_type();
-                    let found_type = self.get_type(&member.val);
+                    let expected_type = defined_member_symbol.get_type();
+                    let found_type = self.get_type(member_val);
                     if expected_type != found_type {
                         panic!("expected type {}, found type {}", expected_type, found_type);
                     }

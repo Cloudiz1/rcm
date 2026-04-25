@@ -71,12 +71,6 @@ pub struct Parser {
 }
 
 #[derive(Debug, Clone)]
-pub struct Member {
-    pub identifier: String,
-    pub val: Expression,
-}
-
-#[derive(Debug, Clone)]
 pub enum Expression {
     // expressions
     Null,
@@ -116,7 +110,8 @@ pub enum Expression {
     },
     StructConstructor {
         identifier: String,
-        members: Vec<Member>,
+        members: HashMap<String, Expression>,
+        // members: Vec<Member>,
     },
 }
 
@@ -1005,7 +1000,7 @@ impl Parser {
             return expr;
         }
 
-        let mut members: Vec<Member> = Vec::new();
+        let mut members: HashMap<String, Expression> = HashMap::new();
         let mut comma: bool = true;
 
         if self.current() != lexer::Token::LCurly {
@@ -1026,10 +1021,7 @@ impl Parser {
                 comma = true;
             }
 
-            members.push(Member {
-                identifier: member_name,
-                val
-            })
+            members.insert(member_name, val);
         }
 
         self.advance(); // consume RCurly
