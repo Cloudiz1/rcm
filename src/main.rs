@@ -33,9 +33,9 @@ fn main() {
     };
 
     let mut analyzer = analysis::Analyzer::new();
-    analyzer.analyze(ast.clone());
+    let globals = analyzer.analyze(ast.clone());
 
-    let mut ssa = ir::SSA::new();
+    let mut ssa = ir::SSA::new(globals);
     ssa.ir_gen(ast);
     ssa.print_ids();
     ssa.print_blocks();

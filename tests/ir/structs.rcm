@@ -1,0 +1,13 @@
+struct foo {
+	x: i32,
+	y: i32,
+}
+
+fn main() i32 {
+	let a = foo {
+		x: 3,
+		y: 4,
+	};
+
+	return a.x + a.y;
+}

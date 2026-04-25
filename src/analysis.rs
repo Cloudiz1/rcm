@@ -7,7 +7,7 @@ fn variant_eq(a: &parser::Type, b: &parser::Type) -> bool {
 }
 
 #[derive(Debug, Clone)]
-enum Symbol {
+pub enum Symbol {
     Function {
         public: bool,
         return_type: parser::Type,
@@ -21,7 +21,8 @@ enum Symbol {
     },
     Struct {
         public: bool,
-        members: HashMap<String, Symbol>,
+        members_arena: Vec<Symbol>,
+        members: HashMap<String, usize>,
         methods: HashMap<String, Symbol>,
         typedef: String,
     },
@@ -50,10 +51,7 @@ impl Type for Symbol {
                 public: _,
             } => return_type.clone(),
             Symbol::Struct {
-                members: _,
-                methods: _,
-                public: _,
-                typedef,
+                typedef, ..
             } => parser::Type::Struct(typedef.clone()),
             Symbol::Member(t) => return t.clone(),
             // _ => {
@@ -112,20 +110,23 @@ fn create_symbol_entry(statement: parser::Statement) -> (String, Symbol) {
             methods, 
             public 
         } => {
-            let mut symbol_members: HashMap<String, Symbol> = HashMap::new();
-            for member in members {
+
+            let mut members_arena: Vec<Symbol> = Vec::new();
+            let mut members_table: HashMap<String, usize> = HashMap::new();
+            for (i, member) in members.into_iter().enumerate() {
                 let (member_name, symbol) = create_symbol_entry(*member);
-                if contains_defintion(&symbol_members, &member_name) {
+                if members_table.contains_key(&member_name) { // no duplicate fields
                     panic!("cannot redefine member {} in struct {}", member_name, name);
                 }
-                
-                symbol_members.insert(member_name, symbol);
+
+                members_table.insert(member_name, i);
+                members_arena.push(symbol);
             }
 
             let mut symbol_methods: HashMap<String, Symbol> = HashMap::new();
             for method in methods {
                 let (method_name, symbol) = create_symbol_entry(*method);
-                if contains_defintion(&symbol_members, &method_name) {
+                if members_table.contains_key(&method_name) { // no duplicate methods or fields
                     panic!("cannot redefine method {} in struct {}", method_name, name);
                 }
 
@@ -136,7 +137,8 @@ fn create_symbol_entry(statement: parser::Statement) -> (String, Symbol) {
                 name.clone(),
                 Symbol::Struct { 
                     public, 
-                    members: symbol_members, 
+                    members_arena, 
+                    members: members_table,
                     methods: symbol_methods,
                     typedef: name,
                 }
@@ -317,6 +319,7 @@ impl Analyzer {
         let Symbol::Struct { 
             public,
             members,
+            members_arena,
             methods,
             typedef,
         } = lhs_symbol else {
@@ -324,7 +327,7 @@ impl Analyzer {
         };
 
         if let Some(member) = members.get(rhs) {
-            return member.clone();
+            return members_arena[*member].clone();
         }
 
         if let Some(method) = methods.get(rhs) {
@@ -474,6 +477,7 @@ impl Analyzer {
                 let symbol = self.get_symbol(identifier, "unrecognized struct");
                 let Symbol::Struct { 
                     public, 
+                    members_arena,
                     members: defined_members, 
                     methods,
                     typedef 
@@ -488,6 +492,7 @@ impl Analyzer {
                         .map(|x| x.clone().identifier)
                         .collect::<Vec<String>>();
 
+                    // TODO: hashmap
                     for member in defined_members.keys() {
                         if !constructed_members.contains(member) {
                             // TODO: collect all the missing ones and make one big error
@@ -501,7 +506,7 @@ impl Analyzer {
                         panic!("unrecognized struct member");
                     };
 
-                    let expected_type = defined_member_symbol.get_type();
+                    let expected_type = members_arena[*defined_member_symbol].get_type();
                     let found_type = self.get_type(&member.val);
                     if expected_type != found_type {
                         panic!("expected type {}, found type {}", expected_type, found_type);
@@ -677,11 +682,13 @@ impl Analyzer {
         }
     }
 
-    pub fn analyze(&mut self, ast: Vec<parser::Statement>) {
+    pub fn analyze(&mut self, ast: Vec<parser::Statement>) -> HashMap<String, Symbol> {
         self.get_globals(ast.clone());
 
         for statement in ast {
             self.analyze_statement(statement, &None);
         }
+
+        return std::mem::take(&mut self.tables[0]);
     }
 }

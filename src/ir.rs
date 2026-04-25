@@ -1,5 +1,6 @@
 use crate::lexer;
 use crate::parser;
+use crate::analysis;
 use std::collections::HashMap;
 
 pub type BlockId = usize;
@@ -77,6 +78,10 @@ pub enum Value {
     ArrayAccess {
         array: ValueId,
         index: ValueId,
+    },
+    Struct {
+        names: Vec<String>,
+        members: Vec<ValueId>,
     },
     GetElmPtr {
         base: ValueId,
@@ -166,10 +171,11 @@ pub struct SSA {
 
     exit_block: BlockId,
     returns: Vec<ValueId>,
+    // symbols: HashMap<String, analysis::Symbol>,
 }
 
 impl SSA {
-    pub fn new() -> Self {
+    pub fn new(globals: HashMap<String, analysis::Symbol>) -> Self {
         Self {
             blocks: Vec::new(),
             values: Vec::new(),
@@ -183,6 +189,7 @@ impl SSA {
 
             exit_block: 0,
             returns: Vec::new(),
+            // symbols: globals,
         }
     }
 
@@ -348,6 +355,12 @@ impl SSA {
                 ..
             } => {
                 let val = initial_value.map_or(self.add_value(Value::UNDEF), |e| self.expr(e));
+                if let Value::Struct { members, typedef } = &self.values[val] {
+                    let struct_symbol = self.symbols.get(typedef).unwrap();
+                    for member in members {
+
+                    }
+                }
                 self.write_variable(identifier, self.curr_block_id - 1, val);
             }
             Statement::FunctionDeclaration { 
@@ -388,7 +401,6 @@ impl SSA {
                 condition, 
                 block 
             } => {
-
                 let entry = self.add_block(Block::new(self.pred, "while entry"));
                 self.expr(condition);
                 self.blocks[entry].filled = true; // NOT SEALED
@@ -413,7 +425,6 @@ impl SSA {
                 self.seal_block(entry);
 
                 let cond = self.expr(condition);
-                // self.blocks[self.pred.unwrap()].instructions.pop(); // rewrites using the branch value
                 let br = self.add_value(Value::Branch { cond });
                 self.blocks[self.pred.unwrap()].instructions.push(br);
                 self.blocks[entry].filled = true;
@@ -470,15 +481,15 @@ impl SSA {
                 operator, 
                 mut rhs, 
             } => {
-                if [lexer::Token::Plus,
-                    lexer::Token::Star,
-                    lexer::Token::Ampersand,
-                    lexer::Token::Pipe,
-                    lexer::Token::Caret
-                ].contains(&operator) {
-                    // TODO: this should be ordered not just swapped????
-                    // std::mem::swap(&mut lhs, &mut rhs);
-                }
+                // if [lexer::Token::Plus,
+                //     lexer::Token::Star,
+                //     lexer::Token::Ampersand,
+                //     lexer::Token::Pipe,
+                //     lexer::Token::Caret
+                // ].contains(&operator) {
+                //     // TODO: this should be ordered not just swapped????
+                //     // std::mem::swap(&mut lhs, &mut rhs);
+                // }
 
                 let op = match operator {
                     lexer::Token::Plus => BinaryOp::Add,
@@ -531,14 +542,20 @@ impl SSA {
                 self.read_variable(name, self.pred.unwrap())
             }
             e @ parser::Expression::Dot { .. } => {
+                dbg!(&e);
+                dbg!(&expr_to_string(e.clone()));
                 self.read_variable(expr_to_string(e), self.pred.unwrap())
             }
             parser::Expression::Assignment { 
                 identifier, 
                 value 
             } => {
+                let mut identifier = expr_to_string(*identifier);
                 let val = self.expr(*value);
-                self.write_variable(expr_to_string(*identifier), self.pred.unwrap(), val);
+                // if let Value::Struct{ typedef, members } = &self.values[val] {
+                // }
+                //
+                self.write_variable(identifier, self.pred.unwrap(), val);
                 return val;
             }
             parser::Expression::FunctionCall {
@@ -567,7 +584,18 @@ impl SSA {
             },
             parser::Expression::StructConstructor {
                 identifier, members
-            } => todo!(),
+            } => {
+                let members = members.into_iter().map(|x| self.expr(x.val)).collect();
+                return self.add_value(Value::Struct { members });
+
+                // let members = members.into_iter().map(|x| {
+                //     let name = std::format!("{identifier}.{}", x.identifier);
+                //     dbg!(&name);
+                //     let value = self.expr(x.val);
+                //     self.write_variable(name, self.pred.unwrap(), value);
+                //     value
+                // }).collect();
+            },
             _ => todo!(),
         }
     }
@@ -590,7 +618,7 @@ impl SSA {
         println!("");
     }
 
-    fn print_instruction(&self, inst: ValueId, mut prev_phis: Vec<ValueId>) {
+    fn print_instruction(&self, inst: ValueId, mut prev_insts: Vec<ValueId>) {
         match &self.values[inst] {
             Value::Int(v) => print!("{}", v),
             Value::Float(v) => print!("{}", v),
@@ -599,27 +627,27 @@ impl SSA {
             Value::String(v) => print!("{}", v),
             Value::Binary { op, lhs, rhs } => {
                 print!("(");
-                self.print_instruction(*lhs, prev_phis.clone());
+                self.print_instruction(*lhs, prev_insts.clone());
                 print!(" {:?} ", op);
-                self.print_instruction(*rhs, prev_phis);
+                self.print_instruction(*rhs, prev_insts);
                 print!(")");
             }
             Value::Unary { op, member } => {
                 print!("({:?} ", op);
-                self.print_instruction(*member, prev_phis);
+                self.print_instruction(*member, prev_insts);
                 print!(")");
             }
             Value::Array { elements } => {
                 print!("[");
                 for (i, e) in elements.iter().enumerate() {
-                    self.print_instruction(*e, prev_phis.clone());
+                    self.print_instruction(*e, prev_insts.clone());
                     if i != elements.len() - 1 { print!(", ") }
                 }
                 print!("]");
             }
             Value::ArrayAccess { array, index } => {
                 print!("Array<{array}>[");
-                self.print_instruction(*index, prev_phis);
+                self.print_instruction(*index, prev_insts);
                 print!("]");
             }
             Value::GetElmPtr { base, index, size } => unimplemented!(),
@@ -628,7 +656,7 @@ impl SSA {
             Value::Call { name, args } => {
                 print!("call <{}> (", name);
                 for (i, arg) in args.iter().enumerate() {
-                    self.print_instruction(*arg, prev_phis.clone());
+                    self.print_instruction(*arg, prev_insts.clone());
                     if i != args.len() - 1 { print!(", "); }
                 }
 
@@ -638,10 +666,10 @@ impl SSA {
             Value::Phi { block, operands } => {
                 print!("phi(");
                 for (i, op) in operands.iter().enumerate() {
-                    if prev_phis.contains(op) { print!("<{}>", *op) }
+                    if prev_insts.contains(op) { print!("<{}>", *op) }
                     else { 
-                        prev_phis.push(*op);
-                        self.print_instruction(*op, prev_phis.clone()); 
+                        prev_insts.push(*op);
+                        self.print_instruction(*op, prev_insts.clone()); 
                     }
                     if i != operands.len() - 1 { print!(", ") };
                 }
@@ -653,12 +681,21 @@ impl SSA {
             }
             Value::Ret { value } => {
                 print!("ret ");
-                self.print_instruction(*value, prev_phis);
+                self.print_instruction(*value, prev_insts);
             }
             Value::Branch { cond } => {
                 print!("br <");
-                self.print_instruction(*cond, prev_phis);
+                self.print_instruction(*cond, prev_insts);
                 print!(">");
+            }
+            Value::Struct { members, typedef} => {
+                print!("struct{{ ");
+                for (i, member) in members.iter().enumerate() {
+                    // TODO: this might lead to recursive printing with pointers :pensive:
+                    self.print_instruction(member.clone(), prev_insts.clone());
+                    if i != members.len() - 1 { print!(", ") }
+                }
+                print!("}}");
             }
         }
     }
@@ -668,7 +705,7 @@ impl SSA {
             println!("{}: {}", i, block.name);
             println!("    instructions:");
             for inst in &block.instructions {
-                print!("\t");
+                print!("    ");
                 self.print_instruction(*inst, Vec::new());
                 println!("");
             }
