@@ -367,7 +367,8 @@ impl Analyzer {
                         return parser::Type::Pointer(Box::new(inner_type));
                     }
                     lexer::Token::DotStar => {
-                        self.get_type(member)
+                        let parser::Type::Pointer(nested) = self.get_type(member) else { unreachable!() };
+                        return *nested;
                     }
                     _ => panic!("unexpected operator in unary expression. found: {:?}", operator),
                 }
@@ -393,6 +394,7 @@ impl Analyzer {
                 }
                 
                 if lhs_type != rhs_type {
+                    dbg!(lhs, rhs);
                     panic!("expected type {} found type {}", lhs_type, rhs_type);
                 }
                 

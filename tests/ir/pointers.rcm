@@ -1,0 +1,6 @@
+fn main() i32 {
+	let v = 3;
+	let p = &v;
+	let a: i32 = p.*;
+	return a * v;
+}

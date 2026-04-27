@@ -1,7 +1,6 @@
 use crate::lexer;
 use crate::parser;
 use crate::analysis;
-use std::any;
 use std::collections::HashMap;
 
 pub type BlockId = usize;
@@ -94,6 +93,7 @@ pub enum Value {
         address: ValueId,
         value: ValueId,
     },
+    Address(ValueId),
     Call {
         name: String,
         args: Vec<ValueId>,
@@ -143,7 +143,7 @@ pub struct Block {
 }
 
 impl Block {
-    fn new(pred: Option<BlockId>, name: &'static str) -> Self {
+    fn new(name: &'static str) -> Self {
         Self {
             name,
             current_definitions: HashMap::new(),
@@ -153,7 +153,7 @@ impl Block {
             filled: false,
             sealed: false,
 
-            predecessors: pred.map_or(Vec::new(), |p| Vec::from([p])),
+            predecessors: Vec::new(),
             successors: Vec::new(),
         }
     }
@@ -200,14 +200,20 @@ impl SSA {
     }
 
     fn add_block(&mut self, block: Block) -> BlockId {
-        if !block.predecessors.is_empty() {
-            self.blocks[block.predecessors[0]].successors.push(self.curr_block_id);
-        }
+        // if !block.predecessors.is_empty() {
+        //     self.blocks[block.predecessors[0]].successors.push(self.curr_block_id);
+        // }
 
         self.pred = Some(self.curr_block_id);
         self.blocks.push(block);
         self.curr_block_id += 1;
         return self.curr_block_id - 1;
+    }
+
+    fn create_edge(&mut self, pred: &BlockId, succ: &BlockId) {
+        dbg!(pred, succ);
+        self.blocks[*pred].successors.push(*succ);
+        self.blocks[*succ].predecessors.push(*pred);
     }
 
     fn add_value(&mut self, value: Value) -> ValueId {
@@ -367,9 +373,12 @@ impl SSA {
     fn statement(&mut self, stmt: parser::Statement, block_name: &'static str) {
         use parser::Statement;
         match stmt {
-            Statement::ParseError => panic!("internal error: how did a ParseError even make its way to IR gen"),
+            Statement::ParseError => unreachable!("internal error: how did a ParseError even make its way to IR gen"),
             Statement::Block(stmts) => {
-                let b = self.add_block(Block::new(self.pred, block_name));
+                // let b = self.add_block(Block::new(self.pred, block_name));
+                let pred = &self.pred.unwrap();
+                let b = self.add_block(Block::new(block_name));
+                self.create_edge(pred, &b);
                 self.seal_block(b);
 
                 for s in stmts {
@@ -378,16 +387,6 @@ impl SSA {
 
                 self.blocks[b].filled = true;
             }
-            Statement::ExpressionStatement(expr) => { self.expr(expr); },
-            Statement::VariableDeclaration {
-                identifier, 
-                variable_type, 
-                initial_value, 
-                ..
-            } => {
-                let val = initial_value.map_or(self.add_value(Value::UNDEF), |e| self.expr(e));
-                self.write_variable_complete(identifier, val);
-            }
             Statement::FunctionDeclaration { 
                 name, 
                 return_type, 
@@ -395,9 +394,8 @@ impl SSA {
                 body, 
                 public 
             } => {
-                self.exit_block = self.add_block(Block::new(None, "exit block"));
-
-                let entry = self.add_block(Block::new(None, "function entry")); // adds param to entry block
+                self.exit_block = self.add_block(Block::new("exit block"));
+                let entry = self.add_block(Block::new("function entry")); // adds param to entry block
                 self.seal_block(entry);
 
                 for (i, p) in parameters.into_iter().enumerate() {
@@ -421,12 +419,27 @@ impl SSA {
                     let ret = self.add_value(Value::Ret { value: phi });
                     self.blocks[self.exit_block].instructions.push(ret);
                 }
+
+                self.create_edge(&self.pred.unwrap(), &self.exit_block.clone());
+            }
+            Statement::ExpressionStatement(expr) => { self.expr(expr); },
+            // TODO: pointers
+            Statement::VariableDeclaration {
+                identifier, 
+                variable_type, 
+                initial_value, 
+                ..
+            } => {
+                let val = initial_value.map_or(self.add_value(Value::UNDEF), |e| self.expr(e));
+                self.write_variable(identifier, self.pred.unwrap(), val);
+                // self.write_variable_complete(identifier, val);
             }
             Statement::WhileStatement { 
                 condition, 
                 block 
             } => {
-                let entry = self.add_block(Block::new(self.pred, "while entry"));
+                let entry = self.add_block(Block::new("while entry"));
+                self.create_edge(&self.pred.unwrap(), &entry);
                 self.expr(condition);
                 self.blocks[entry].filled = true; // NOT SEALED
 
@@ -437,7 +450,8 @@ impl SSA {
 
                 // we need the next block to attach the entry
                 self.pred = Some(entry);
-                let post = self.add_block(Block::new(Some(entry), "use"));
+                let post = self.add_block(Block::new("use"));
+                self.create_edge(&entry, &post);
                 self.seal_block(post);
             }
             Statement::IfStatement { 
@@ -458,7 +472,8 @@ impl SSA {
                 let then_b = self.pred.unwrap();
                 self.blocks[then_b].filled = true;
 
-                let merge_b = self.add_block(Block::new(Some(then_b), "if merge"));
+                let merge_b = self.add_block(Block::new("if merge"));
+                self.create_edge(&then_b, &merge_b);
 
                 if let Some(alt_b) = alt {
                     self.pred = Some(entry); 
@@ -479,7 +494,7 @@ impl SSA {
             }
             Statement::Parameter { .. } => { unreachable!(); }
             // since these only exist in the frontend, i think this okay?
-            Statement::StructDeclaration { .. } => return,
+            Statement::StructDeclaration { .. } => return, // TODO: methods
             Statement::Member { .. } => return,
             Statement::Return { value } => {
                 if let Some(val) = value {
@@ -550,13 +565,20 @@ impl SSA {
                 operator, 
                 member 
             } => {
+                let new_member = self.expr(*member);
+
+                // match operator {
+                //     lexer::Token::Ampersand => self.store(<value>),
+                //     lexer::Token::DotStar => self.load(<new_member>),
+                //     _ => 
+                // }
+
                 let op = match operator {
                     lexer::Token::Bang => UnaryOp::Not,
                     lexer::Token::Minus => UnaryOp::Neg,
                     _ => panic!("internal error: invalid unary operator")
                 };
 
-                let new_member = self.expr(*member);
                 let val = Value::Unary { op, member: new_member };
                 let id = self.add_value(val);
                 self.blocks[self.pred.unwrap()].instructions.push(id);
@@ -575,9 +597,13 @@ impl SSA {
                 identifier, 
                 value 
             } => {
+                // TODO: this "explodes" all structs. not good!
+                // instead, do a prepass, find candinates for SROA (no direct memory access, not
+                // passed as a "reference" to a function, fewer than 16 members)
                 let identifier = expr_to_string(*identifier);
                 let val = self.expr(*value);
-                self.write_variable_complete(identifier, val);
+                self.write_variable(identifier, self.pred.unwrap(), val);
+                // self.write_variable_complete(identifier, val);
                 return val;
             }
             parser::Expression::FunctionCall {
@@ -599,10 +625,11 @@ impl SSA {
             parser::Expression::ArrayAccess {
                 identifier, index 
             } => {
-                let array = self.read_variable(expr_to_string(*identifier), self.pred.unwrap());
-                let index_expr = self.expr(*index);
-                let element = self.add_value(Value::ArrayAccess { array, index: index_expr });
-                return element;
+                todo!();
+                // let array = self.read_variable(expr_to_string(*identifier), self.pred.unwrap());
+                // let index_expr = self.expr(*index);
+                // let element = self.add_value(Value::ArrayAccess { array, index: index_expr });
+                // return element;
             },
             parser::Expression::StructConstructor {
                 identifier, members
@@ -625,8 +652,12 @@ impl SSA {
     }
 
     pub fn ir_gen(&mut self, statements: Vec<parser::Statement>) {
+        let entry = self.add_block(Block::new("entry"));
+        let undef = self.add_value(Value::UNDEF);
+        self.write_variable("@MEMORY".to_owned(), entry, undef);
+
         for s in statements {
-            self.statement(s, "entry");
+            self.statement(s, "top level");
             self.pred = None;
         }
     }
@@ -675,6 +706,7 @@ impl SSA {
                 print!("]");
             }
             Value::GetElmPtr { base, index, size } => unimplemented!(),
+            Value::Address(val) => todo!(),
             Value::Load(_) => unimplemented!(),
             Value::Store { address, value } => unimplemented!(),
             Value::Call { name, args } => {
