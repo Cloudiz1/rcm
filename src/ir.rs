@@ -210,10 +210,13 @@ impl SSA {
         return self.curr_block_id - 1;
     }
 
-    fn create_edge(&mut self, pred: &BlockId, succ: &BlockId) {
-        dbg!(pred, succ);
-        self.blocks[*pred].successors.push(*succ);
-        self.blocks[*succ].predecessors.push(*pred);
+    fn create_edge(&mut self, pred: BlockId, succ: BlockId) {
+        self.blocks[pred].successors.push(succ);
+        self.blocks[succ].predecessors.push(pred);
+    }
+
+    fn add_inst(&mut self, block: BlockId, val: ValueId) {
+        self.blocks[block].instructions.push(val);
     }
 
     fn add_value(&mut self, value: Value) -> ValueId {
@@ -376,9 +379,9 @@ impl SSA {
             Statement::ParseError => unreachable!("internal error: how did a ParseError even make its way to IR gen"),
             Statement::Block(stmts) => {
                 // let b = self.add_block(Block::new(self.pred, block_name));
-                let pred = &self.pred.unwrap();
+                let pred = self.pred.unwrap();
                 let b = self.add_block(Block::new(block_name));
-                self.create_edge(pred, &b);
+                self.create_edge(pred, b);
                 self.seal_block(b);
 
                 for s in stmts {
@@ -412,15 +415,15 @@ impl SSA {
                 let returns = std::mem::take(&mut self.returns);
                 if returns.len() == 1 {
                     let ret = self.add_value(Value::Ret { value: returns[0] });
-                    self.blocks[self.exit_block].instructions.push(ret);
+                    self.add_inst(self.exit_block, ret);
                 } else {
                     let operands = returns.into_iter().collect();
                     let phi = self.add_value(Value::Phi { block: self.pred.unwrap(), operands });
                     let ret = self.add_value(Value::Ret { value: phi });
-                    self.blocks[self.exit_block].instructions.push(ret);
+                    self.add_inst(self.exit_block, ret);
                 }
 
-                self.create_edge(&self.pred.unwrap(), &self.exit_block.clone());
+                self.create_edge(self.pred.unwrap(), self.exit_block);
             }
             Statement::ExpressionStatement(expr) => { self.expr(expr); },
             // TODO: pointers
@@ -439,19 +442,18 @@ impl SSA {
                 block 
             } => {
                 let entry = self.add_block(Block::new("while entry"));
-                self.create_edge(&self.pred.unwrap(), &entry);
+                self.create_edge(self.pred.unwrap(), entry);
                 self.expr(condition);
                 self.blocks[entry].filled = true; // NOT SEALED
 
                 self.statement(*block, "while body"); 
-                self.blocks[entry].predecessors.push(self.pred.unwrap()); // loop to while header
-                self.blocks[self.pred.unwrap()].successors.push(entry); // loop to while header
+                self.create_edge(entry, self.pred.unwrap()); // loop to while header
                 self.seal_block(entry);
 
                 // we need the next block to attach the entry
                 self.pred = Some(entry);
                 let post = self.add_block(Block::new("use"));
-                self.create_edge(&entry, &post);
+                self.create_edge(entry, post);
                 self.seal_block(post);
             }
             Statement::IfStatement { 
@@ -460,12 +462,11 @@ impl SSA {
                 alt 
             } => {
                 let entry = self.pred.unwrap();
-                // let entry = self.add_block(Block::new(self.pred, "if entry"));
                 self.seal_block(entry);
 
                 let cond = self.expr(condition);
                 let br = self.add_value(Value::Branch { cond });
-                self.blocks[self.pred.unwrap()].instructions.push(br);
+                self.add_inst(self.pred.unwrap(), br);
                 self.blocks[entry].filled = true;
 
                 self.statement(*block, "then block"); // then
@@ -473,7 +474,7 @@ impl SSA {
                 self.blocks[then_b].filled = true;
 
                 let merge_b = self.add_block(Block::new("if merge"));
-                self.create_edge(&then_b, &merge_b);
+                self.create_edge(then_b, merge_b);
 
                 if let Some(alt_b) = alt {
                     self.pred = Some(entry); 
@@ -483,8 +484,7 @@ impl SSA {
                     self.seal_block(else_b);
 
                     // create the edge between else and merge
-                    self.blocks[else_b].successors.push(merge_b);
-                    self.blocks[merge_b].predecessors.push(else_b);
+                    self.create_edge(else_b, merge_b);
                 }
 
                 self.blocks[merge_b].filled = true;
@@ -503,9 +503,7 @@ impl SSA {
                 }
 
                 let jump = self.add_value(Value::Jump(self.exit_block));
-                self.blocks[self.exit_block].predecessors.push(self.pred.unwrap());
-                self.blocks[self.pred.unwrap()].successors.push(self.exit_block);
-                self.blocks[self.pred.unwrap()].instructions.push(jump);
+                self.add_inst(self.pred.unwrap(), jump);
             }
         }
     }
@@ -555,7 +553,6 @@ impl SSA {
                 let new_rhs = self.expr(*rhs);
                 let val = Value::Binary { op, lhs: new_lhs, rhs: new_rhs };
                 let id = self.add_value(val);
-                // self.blocks[self.pred.unwrap()].instructions.push(id);
 
                 self.add_use(new_lhs, id);
                 self.add_use(new_rhs, id);
@@ -567,11 +564,19 @@ impl SSA {
             } => {
                 let new_member = self.expr(*member);
 
-                // match operator {
-                //     lexer::Token::Ampersand => self.store(<value>),
-                //     lexer::Token::DotStar => self.load(<new_member>),
-                //     _ => 
-                // }
+                match operator {
+                    lexer::Token::Ampersand => {
+                        let reference = self.add_value(Value::Address(new_member));
+                        self.add_use(new_member, reference);
+                        return reference;
+                    }
+                    lexer::Token::DotStar => {
+                        let deref = self.add_value(Value::Load(new_member));
+                        self.add_use(new_member, deref);
+                        return deref;
+                    }
+                    _ => {}
+                };
 
                 let op = match operator {
                     lexer::Token::Bang => UnaryOp::Not,
@@ -581,7 +586,6 @@ impl SSA {
 
                 let val = Value::Unary { op, member: new_member };
                 let id = self.add_value(val);
-                self.blocks[self.pred.unwrap()].instructions.push(id);
                 self.add_use(new_member, id);
                 return id;
             }
@@ -589,8 +593,6 @@ impl SSA {
                 self.read_variable(name, self.pred.unwrap())
             }
             e @ parser::Expression::Dot { .. } => {
-                dbg!(&e);
-                dbg!(&expr_to_string(e.clone()));
                 self.read_variable(expr_to_string(e), self.pred.unwrap())
             }
             parser::Expression::Assignment { 
@@ -600,6 +602,15 @@ impl SSA {
                 // TODO: this "explodes" all structs. not good!
                 // instead, do a prepass, find candinates for SROA (no direct memory access, not
                 // passed as a "reference" to a function, fewer than 16 members)
+                
+                if matches!(*identifier, parser::Expression::Unary { operator: lexer::Token::DotStar, .. }) {
+                    let address = self.expr(*identifier);
+                    let val = self.expr(*value);
+                    let inst = self.add_value(Value::Store { address, value: val });
+                    self.add_inst(self.pred.unwrap(), inst);
+                    return inst;
+                }
+
                 let identifier = expr_to_string(*identifier);
                 let val = self.expr(*value);
                 self.write_variable(identifier, self.pred.unwrap(), val);
@@ -612,9 +623,8 @@ impl SSA {
                 let name = expr_to_string(*identifier);
                 let args = args.iter().map(|x| self.expr(*x.clone())).collect::<Vec<ValueId>>();
                 let call = self.add_value(Value::Call { name, args });
-                self.blocks[self.pred.unwrap()].instructions.push(call);
+                self.add_inst(self.pred.unwrap(), call);
                 return call;
-                // let call = self.add_value(Values)
             },
             parser::Expression::ArrayConstructor {
                 values
@@ -652,9 +662,9 @@ impl SSA {
     }
 
     pub fn ir_gen(&mut self, statements: Vec<parser::Statement>) {
-        let entry = self.add_block(Block::new("entry"));
-        let undef = self.add_value(Value::UNDEF);
-        self.write_variable("@MEMORY".to_owned(), entry, undef);
+        // let entry = self.add_block(Block::new("entry"));
+        // let undef = self.add_value(Value::UNDEF);
+        // self.write_variable("@MEMORY".to_owned(), entry, undef);
 
         for s in statements {
             self.statement(s, "top level");
@@ -706,9 +716,23 @@ impl SSA {
                 print!("]");
             }
             Value::GetElmPtr { base, index, size } => unimplemented!(),
-            Value::Address(val) => todo!(),
-            Value::Load(_) => unimplemented!(),
-            Value::Store { address, value } => unimplemented!(),
+            Value::Address(val) => {
+                print!("addr(");
+                self.print_instruction(*val, prev_insts);
+                print!(")");
+            },
+            Value::Load(val) => {
+                print!("Load(");
+                self.print_instruction(*val, prev_insts);
+                print!(")");
+            },
+            Value::Store { address, value } => {
+                print!("Store(");
+                self.print_instruction(*address, prev_insts.clone());
+                print!(", ");
+                self.print_instruction(*value, prev_insts);
+                print!(")");
+            },
             Value::Call { name, args } => {
                 print!("call <{}> (", name);
                 for (i, arg) in args.iter().enumerate() {
@@ -761,7 +785,7 @@ impl SSA {
             println!("{}: {}", i, block.name);
             println!("    instructions:");
             for inst in &block.instructions {
-                print!("    ");
+                print!("        ");
                 self.print_instruction(*inst, Vec::new());
                 println!("");
             }

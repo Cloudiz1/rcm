@@ -1,0 +1,14 @@
+fn main() i32 {
+	let v1 = 3;
+	let v2 = 5;
+	let p = &v1;
+	let q = &v2;
+
+	if v1 < 5 {
+		p.* = 4;
+	} else {
+		q.* = 3;
+	}
+
+	return p.*;
+}

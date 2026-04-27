@@ -394,7 +394,6 @@ impl Analyzer {
                 }
                 
                 if lhs_type != rhs_type {
-                    dbg!(lhs, rhs);
                     panic!("expected type {} found type {}", lhs_type, rhs_type);
                 }
                 
