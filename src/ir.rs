@@ -84,9 +84,8 @@ pub enum Value {
         members: Vec<ValueId>,
     },
     GetElmPtr {
-        base: ValueId,
+        base: String,
         index: ValueId,
-        size: usize,
     },
     Load(ValueId),
     Store {
@@ -433,9 +432,18 @@ impl SSA {
                 initial_value, 
                 ..
             } => {
-                let val = initial_value.map_or(self.add_value(Value::UNDEF), |e| self.expr(e));
+                if let Some(e) = initial_value { // if it exists just reuse assignment code
+                    let assignement = parser::Expression::Assignment { 
+                        identifier: Box::new(parser::Expression::Identifier(identifier)),
+                        value: Box::new(e) 
+                    };
+
+                    self.expr(assignement);
+                    return;
+                }
+
+                let val = self.add_value(Value::UNDEF); // else init with UNDEF
                 self.write_variable(identifier, self.pred.unwrap(), val);
-                // self.write_variable_complete(identifier, val);
             }
             Statement::WhileStatement { 
                 condition, 
@@ -493,7 +501,6 @@ impl SSA {
                 self.pred = Some(merge_b);
             }
             Statement::Parameter { .. } => { unreachable!(); }
-            // since these only exist in the frontend, i think this okay?
             Statement::StructDeclaration { .. } => return, // TODO: methods
             Statement::Member { .. } => return,
             Statement::Return { value } => {
@@ -603,6 +610,7 @@ impl SSA {
                 // instead, do a prepass, find candinates for SROA (no direct memory access, not
                 // passed as a "reference" to a function, fewer than 16 members)
                 
+                // p.* = foo;
                 if matches!(*identifier, parser::Expression::Unary { operator: lexer::Token::DotStar, .. }) {
                     let address = self.expr(*identifier);
                     let val = self.expr(*value);
@@ -611,10 +619,39 @@ impl SSA {
                     return inst;
                 }
 
+                // arr[i] = foo;
+                if let parser::Expression::ArrayAccess { identifier, index } = *identifier {
+                    let access = Value::GetElmPtr { base: expr_to_string(*identifier), index: self.expr(*index) };
+                    let gep = self.add_value(access);
+                    let rhs = self.expr(*value);
+
+                    let store = self.add_value(Value::Store {
+                        address: gep,
+                        value: rhs,
+                    });
+
+                    self.add_inst(self.pred.unwrap(), store);
+                    return store;
+                };
+
+                // arr = [ .. ]; -> 
+                // arr[0] = ..
+                // arr[1] = ..
+                // ...
+                if matches!(*value, parser::Expression::ArrayConstructor { .. }) { // matches! to save a clone
+                    let parser::Expression::ArrayConstructor { values } = *value else { unreachable!() };
+                    for (i, value) in values.into_iter().enumerate() {
+                        let index = parser::Expression::ArrayAccess { identifier: identifier.clone(), index: Box::new(parser::Expression::Int(i as i64)) };
+                        let assignment = parser::Expression::Assignment { identifier: Box::new(index), value };
+                        self.expr(assignment);
+                    }
+
+                    return 0; // nothing reads the output of assignement anyways
+                }
+
                 let identifier = expr_to_string(*identifier);
                 let val = self.expr(*value);
                 self.write_variable(identifier, self.pred.unwrap(), val);
-                // self.write_variable_complete(identifier, val);
                 return val;
             }
             parser::Expression::FunctionCall {
@@ -630,16 +667,17 @@ impl SSA {
                 values
             } => {
                 let elements = values.iter().map(|x| self.expr(*x.clone())).collect::<Vec<ValueId>>();
+                dbg!(&elements);
                 return self.add_value(Value::Array { elements });
             },
             parser::Expression::ArrayAccess {
                 identifier, index 
             } => {
-                todo!();
-                // let array = self.read_variable(expr_to_string(*identifier), self.pred.unwrap());
-                // let index_expr = self.expr(*index);
-                // let element = self.add_value(Value::ArrayAccess { array, index: index_expr });
-                // return element;
+                // TODO: yeah this doesn't work at all with ptr arithmatic but thats not important right now
+                let access = Value::GetElmPtr { base: expr_to_string(*identifier), index: self.expr(*index) };
+                let inst = self.add_value(access);
+                let load = self.add_value(Value::Load(inst));
+                return load;
             },
             parser::Expression::StructConstructor {
                 identifier, members
@@ -715,7 +753,11 @@ impl SSA {
                 self.print_instruction(*index, prev_insts);
                 print!("]");
             }
-            Value::GetElmPtr { base, index, size } => unimplemented!(),
+            Value::GetElmPtr { base, index } => {
+                print!("GEP({base}, ");
+                self.print_instruction(*index, prev_insts);
+                print!(")");
+            },
             Value::Address(val) => {
                 print!("addr(");
                 self.print_instruction(*val, prev_insts);

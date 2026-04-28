@@ -1,0 +1,11 @@
+fn main() i32 {
+	let v = 3;
+	let p = &v;
+	if v < 3 {
+		p.* = 4;
+	} else {
+		p.* = 5;
+	}
+
+	return p.*;
+}
