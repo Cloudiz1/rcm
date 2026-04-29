@@ -80,11 +80,11 @@ pub enum Value {
         index: ValueId,
     },
     Struct {
-        names: Vec<String>,
+        identifier: String,
         members: Vec<ValueId>,
     },
     GetElmPtr {
-        base: String,
+        base: ValueId,
         index: ValueId,
     },
     Load(ValueId),
@@ -343,34 +343,38 @@ impl SSA {
 // the more 'TAC' like stuff
 impl SSA {
     /// handles structs and normal variables, instead of just variables
-    fn write_variable_complete(&mut self, identifier: String, val: ValueId) {
-        if matches!(self.values[val], Value::Struct { .. }) {
-            self.struct_assignment(identifier, val);
-        } else {
-            self.write_variable(identifier, self.pred.unwrap(), val);
-        }
-    }
+    // fn write_variable_complete(&mut self, identifier: String, val: ValueId) {
+    //     if matches!(self.values[val], Value::Struct { .. }) {
+    //         self.struct_assignment(identifier, val);
+    //     } else {
+    //         self.write_variable(identifier, self.pred.unwrap(), val);
+    //     }
+    // }
 
+    // TODO: rewrite SROA in a later pass
     /// structs need multiple write calls, this function handles that
-    fn struct_assignment(&mut self, variable: String, struct_expr: ValueId) {
-        // take name, say foo
-        // iterate through each member, say foo.x and foo.y
-        // call write variable on them
-        let updates: Vec<(String, usize)> = {
-            let Value::Struct { names, members } = &self.values[struct_expr] else { 
-                unreachable!("internal error: called struct_assignment without a struct") 
-            };
-
-            names.iter().zip(members).map(|(name, member)| {
-                (name.clone(), *member)
-            }).collect()
-        };
-
-        for (name, member) in updates {
-            let var = std::format!("{variable}.{name}");
-            self.write_variable(var, self.pred.unwrap(), member.clone());
-        }
-    }
+    // fn struct_assignment(&mut self, variable: String, struct_expr: ValueId) {
+    //     // take name, say foo
+    //     // iterate through each member, say foo.x and foo.y
+    //     // call write variable on them
+    //
+    //     let updates: Vec<(String, usize)> = {
+    //         let Value::Struct { identifier, members } = &self.values[struct_expr] else { 
+    //             unreachable!("internal error: called struct_assignment without a struct") 
+    //         };
+    //
+    //         // TODO: use symbol lookup
+    //
+    //         names.iter().zip(members).map(|(name, member)| {
+    //             (name.clone(), *member)
+    //         }).collect()
+    //     };
+    //
+    //     for (name, member) in updates {
+    //         let var = std::format!("{variable}.{name}");
+    //         self.write_variable(var, self.pred.unwrap(), member.clone());
+    //     }
+    // }
 
     fn statement(&mut self, stmt: parser::Statement, block_name: &'static str) {
         use parser::Statement;
@@ -533,6 +537,7 @@ impl SSA {
                 //     lexer::Token::Caret
                 // ].contains(&operator) {
                 //     // TODO: this should be ordered not just swapped????
+                //
                 //     // std::mem::swap(&mut lhs, &mut rhs);
                 // }
 
@@ -599,16 +604,22 @@ impl SSA {
             parser::Expression::Identifier(name) => {
                 self.read_variable(name, self.pred.unwrap())
             }
-            e @ parser::Expression::Dot { .. } => {
-                self.read_variable(expr_to_string(e), self.pred.unwrap())
+            parser::Expression::Dot { lhs, rhs } => {
+                let base = self.expr(*lhs);
+                return 0;
             }
             parser::Expression::Assignment { 
                 identifier, 
                 value 
             } => {
-                // TODO: this "explodes" all structs. not good!
-                // instead, do a prepass, find candinates for SROA (no direct memory access, not
+                // Nothing reads the output of Assignment
+                // TODO: find candinates for SROA (no direct memory access, not
                 // passed as a "reference" to a function, fewer than 16 members)
+
+                if let parser::Expression::Identifier(name) = *identifier.clone() {
+                    let val = self.expr(*value.clone());
+                    self.write_variable(name, self.pred.unwrap(), val);
+                }
                 
                 // p.* = foo;
                 if matches!(*identifier, parser::Expression::Unary { operator: lexer::Token::DotStar, .. }) {
@@ -616,12 +627,12 @@ impl SSA {
                     let val = self.expr(*value);
                     let inst = self.add_value(Value::Store { address, value: val });
                     self.add_inst(self.pred.unwrap(), inst);
-                    return inst;
+                    return 0;
                 }
 
                 // arr[i] = foo;
                 if let parser::Expression::ArrayAccess { identifier, index } = *identifier {
-                    let access = Value::GetElmPtr { base: expr_to_string(*identifier), index: self.expr(*index) };
+                    let access = Value::GetElmPtr { base: self.expr(*identifier), index: self.expr(*index) };
                     let gep = self.add_value(access);
                     let rhs = self.expr(*value);
 
@@ -631,7 +642,7 @@ impl SSA {
                     });
 
                     self.add_inst(self.pred.unwrap(), store);
-                    return store;
+                    return 0;
                 };
 
                 // arr = [ .. ]; -> 
@@ -646,13 +657,29 @@ impl SSA {
                         self.expr(assignment);
                     }
 
-                    return 0; // nothing reads the output of assignement anyways
+                    return 0; 
                 }
 
-                let identifier = expr_to_string(*identifier);
-                let val = self.expr(*value);
-                self.write_variable(identifier, self.pred.unwrap(), val);
-                return val;
+                // let foo = {
+                //      x: 1,
+                //      y: 2,
+                // };
+                if matches!(*value, parser::Expression::StructConstructor { .. }) {
+                    let base = self.expr(*identifier);
+                    let constructor = self.expr(*value);
+
+                    let Value::Struct{ identifier: struct_name , members } = self.values[constructor].clone() else { unreachable!() };
+                    for (i, member) in members.into_iter().enumerate() {
+                        let index = self.add_value(Value::Int (i as i64));
+                        let gep = self.add_value( Value::GetElmPtr { base, index });
+                        let store = self.add_value(Value::Store { address: gep, value: member });
+                        self.add_inst(self.pred.unwrap(), store);
+                    }
+
+                    return 0;
+                }
+
+                return 0;
             }
             parser::Expression::FunctionCall {
                 identifier, args
@@ -667,14 +694,14 @@ impl SSA {
                 values
             } => {
                 let elements = values.iter().map(|x| self.expr(*x.clone())).collect::<Vec<ValueId>>();
-                dbg!(&elements);
                 return self.add_value(Value::Array { elements });
             },
             parser::Expression::ArrayAccess {
                 identifier, index 
             } => {
                 // TODO: yeah this doesn't work at all with ptr arithmatic but thats not important right now
-                let access = Value::GetElmPtr { base: expr_to_string(*identifier), index: self.expr(*index) };
+                // TODO: and no more expr to sring!
+                let access = Value::GetElmPtr { base: self.expr(*identifier), index: self.expr(*index) };
                 let inst = self.add_value(access);
                 let load = self.add_value(Value::Load(inst));
                 return load;
@@ -693,7 +720,7 @@ impl SSA {
                     self.expr(val.clone())
                 }).collect(); // done in order of names to preserve order of members
 
-                return self.add_value(Value::Struct { names: names.to_vec(), members: new_members })
+                return self.add_value(Value::Struct { identifier, members: new_members })
             },
             _ => todo!(),
         }
@@ -722,6 +749,11 @@ impl SSA {
     }
 
     fn print_instruction(&self, inst: ValueId, mut prev_insts: Vec<ValueId>) {
+        if prev_insts.contains(&inst) {
+            print!("<{inst}>");
+            return;
+        }
+
         match &self.values[inst] {
             Value::Int(v) => print!("{}", v),
             Value::Float(v) => print!("{}", v),
@@ -754,7 +786,10 @@ impl SSA {
                 print!("]");
             }
             Value::GetElmPtr { base, index } => {
-                print!("GEP({base}, ");
+                print!("GEP(");
+                prev_insts.push(inst);
+                self.print_instruction(*base, prev_insts.clone());
+                print!(", ");
                 self.print_instruction(*index, prev_insts);
                 print!(")");
             },
@@ -788,11 +823,8 @@ impl SSA {
             Value::Phi { block, operands } => {
                 print!("phi(");
                 for (i, op) in operands.iter().enumerate() {
-                    if prev_insts.contains(op) { print!("<{}>", *op) }
-                    else { 
-                        prev_insts.push(*op);
-                        self.print_instruction(*op, prev_insts.clone()); 
-                    }
+                    prev_insts.push(*op);
+                    self.print_instruction(*op, prev_insts.clone()); 
                     if i != operands.len() - 1 { print!(", ") };
                 }
                 print!(")");
@@ -810,8 +842,8 @@ impl SSA {
                 self.print_instruction(*cond, prev_insts);
                 print!(">");
             }
-            Value::Struct { members, names} => {
-                print!("struct{{ ");
+            Value::Struct { identifier, members } => {
+                print!("struct{{");
                 for (i, member) in members.iter().enumerate() {
                     // TODO: this might lead to recursive printing with pointers :pensive:
                     self.print_instruction(member.clone(), prev_insts.clone());

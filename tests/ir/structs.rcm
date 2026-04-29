@@ -3,20 +3,13 @@ struct foo {
 	y: i32,
 }
 
-// because my SSA is very light and its hard to get things to display
-fn ssa_show(int: i32) i32 {
-	return int;
-}
-
-fn main() void {
+fn main() i32 {
 	let a = foo {
 		x: 4,
 		y: 1,
 	};
 
-	ssa_show(a.x + a.y);
-
 	a.x = 6;
 	a.y = 9;
-	ssa_show(a.x + a.y);
+	return a.x + a.y;
 }

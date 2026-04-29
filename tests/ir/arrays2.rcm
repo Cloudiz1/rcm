@@ -1,0 +1,8 @@
+fn nth(arr: [3]i32, i: i32) i32 {
+	return arr[i];
+}
+
+fn main() i32 {
+	let arr: [_]i32 = [1, 2, 3];
+	return nth(arr, 0);
+}
