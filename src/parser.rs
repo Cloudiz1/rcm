@@ -5,6 +5,7 @@ use std::vec::Vec;
 
 // TODO: error sync does not work
 
+pub type ExpressionId = usize;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     Pointer(Box<Type>),
@@ -68,6 +69,7 @@ pub struct Parser {
     lines: Vec<String>,
     src_path: String,
     errored: bool,
+    expression_arena: Vec<Expression>,
 }
 
 #[derive(Debug, Clone)]
@@ -82,35 +84,35 @@ pub enum Expression {
     Bool(bool),
     Unary {
         operator: lexer::Token,
-        member: Box<Expression>,
+        member: ExpressionId,
     },
     Binary {
-        lhs: Box<Expression>,
+        lhs: ExpressionId,
         operator: lexer::Token,
-        rhs: Box<Expression>,
+        rhs: ExpressionId,
     },
     Dot {
-        lhs: Box<Expression>, // these have to decay to identifiers
+        lhs: ExpressionId, // these have to decay to identifiers
         rhs: String, // because its left associative, rhs will always be a string!
     },
     Assignment {
-        identifier: Box<Expression>,
-        value: Box<Expression>,
+        identifier: ExpressionId,
+        value: ExpressionId,
     },
     FunctionCall {
-        identifier: Box<Expression>,
-        args: Vec<Box<Expression>>,
+        identifier: ExpressionId,
+        args: Vec<ExpressionId>,
     },
     ArrayAccess {
-        identifier: Box<Expression>,
-        index: Box<Expression>,
+        identifier: ExpressionId,
+        index: ExpressionId,
     },
     ArrayConstructor {
-        values: Vec<Box<Expression>>,
+        values: Vec<ExpressionId>,
     },
     StructConstructor {
         identifier: String,
-        members: HashMap<String, Expression>,
+        members: HashMap<String, ExpressionId>,
         // members: Vec<Member>,
     },
 }
@@ -118,12 +120,12 @@ pub enum Expression {
 #[derive(Debug, Clone)]
 pub enum Statement {
     ParseError, // used for panic mode
-    ExpressionStatement(Expression),
+    ExpressionStatement(ExpressionId),
     Block(Vec<Box<Statement>>),
     VariableDeclaration {
         identifier: String,
         variable_type: Option<Type>,
-        initial_value: Option<Expression>,
+        initial_value: Option<ExpressionId>,
         constant: bool,
         public: bool,
         global: bool,
@@ -138,7 +140,7 @@ pub enum Statement {
         t: Type,
     },
     Return {
-        value: Option<Expression>,
+        value: Option<ExpressionId>,
     },
     FunctionDeclaration {
         name: String,
@@ -159,12 +161,12 @@ pub enum Statement {
         public: bool,
     },
     IfStatement {
-        condition: Expression,
+        condition: ExpressionId,
         block: Box<Statement>,
         alt: Option<Box<Statement>>,
     },
     WhileStatement {
-        condition: Expression,
+        condition: ExpressionId,
         block: Box<Statement>,
     },
 }
@@ -196,10 +198,10 @@ impl Parser {
             i: 0,
             types,
             panic: false,
-            // out: Vec::new(),
             lines,
             src_path,
             errored: false,
+            expression_arena: Vec::new(),
         }
     }
 
@@ -266,21 +268,6 @@ impl Parser {
         return None;
     }
 
-    fn create_binary(&self, lhs: Expression, operator: lexer::Token, rhs: Expression) -> Expression {
-        Expression::Binary {
-            lhs: Box::new(lhs),
-            operator,
-            rhs: Box::new(rhs),
-        }
-    }
-
-    fn create_unary(&self, operator: lexer::Token, member: Expression) -> Expression {
-        Expression::Unary {
-            operator,
-            member: Box::new(member),
-        }
-    }
-
     fn consume(&mut self, token: lexer::Token, msg: Option<&str>) -> Option<lexer::Token> {
         if !self.at_end() && self.current() == token {
             self.advance();
@@ -316,12 +303,13 @@ impl Parser {
         self.previous() == lexer::Token::Pub
     }
 
-    fn parse_array_expr(&mut self, expr: Expression) -> i64 {
-        match expr {
+    fn parse_array_expr(&mut self, expr: ExpressionId) -> i64 {
+        // TODO: if i can get rid of this clone i deserve all the love in the world
+        match self.expression_arena[expr].clone() {
             Expression::Int(val) => return val,
-            Expression::Binary { lhs, operator, rhs } => {
-                let elhs = self.parse_array_expr(*lhs);
-                let erhs = self.parse_array_expr(*rhs);
+            Expression::Binary { lhs, ref operator, rhs } => {
+                let elhs = self.parse_array_expr(lhs);
+                let erhs = self.parse_array_expr(rhs);
 
                 match operator {
                     lexer::Token::Plus => elhs + erhs,
@@ -621,7 +609,7 @@ impl Parser {
     //     }
     // }
  
-    fn get_implicit_array_length(&mut self, input_type: Type, rhs: Option<Expression>) -> Type {
+    fn get_implicit_array_length(&mut self, input_type: Type, rhs: Option<ExpressionId>) -> Type {
         let Type::Array { mut t, size } = input_type.clone() else {
             return input_type;
         };
@@ -635,13 +623,17 @@ impl Parser {
             return Type::Void;
         };
 
-        let Expression::ArrayConstructor { values } = expr else {
-            self.error("expected array constructor");
-            return Type::Void;
+        let values = {
+            let Expression::ArrayConstructor { values } = &self.expression_arena[expr] else {
+                self.error("expected array constructor");
+                return Type::Void;
+            };
+
+            values.clone()
         };
 
         if let Type::Array { .. } = *t {
-            t = Box::new(self.get_implicit_array_length(*t, Some(*values[0].clone())));
+            t = Box::new(self.get_implicit_array_length(*t, Some(values[0])));
         }
 
         if let Some(declared_size) = size {
@@ -662,7 +654,7 @@ impl Parser {
 
         let mut constant = false;
         let mut variable_type: Option<Type> = None;
-        let mut initial_value: Option<Expression> = None;
+        let mut initial_value: Option<ExpressionId> = None;
         if self.next() == lexer::Token::Const {
             constant = true;
         }
@@ -764,7 +756,7 @@ impl Parser {
     fn return_statement(&mut self) -> Statement {
         self.advance(); // consume return token
 
-        let mut value: Option<Expression> = None;
+        let mut value: Option<ExpressionId> = None;
         if self.current() == lexer::Token::Semicolon {
             self.advance();
         } else { // non empty return
@@ -773,9 +765,7 @@ impl Parser {
             value = Some(expression);
         }
 
-        Statement::Return {
-            value
-        }
+        Statement::Return { value }
     }
 
     fn expression_statement(&mut self) -> Statement {
@@ -787,7 +777,7 @@ impl Parser {
 
 // expressions
 impl Parser {
-    pub fn parse(&mut self) -> Option<Vec<Statement>> {
+    pub fn parse(&mut self) -> Option<(Vec<Statement>, Vec<Expression>)> {
         let mut program: Vec<Statement> = Vec::new();
         while !self.at_end() {
             let statement = self.declaration();
@@ -798,14 +788,16 @@ impl Parser {
             return None;
         }
 
-        Some(program)
+        let expression_arena = std::mem::take(&mut self.expression_arena);
+        Some((program, expression_arena))
     }
 
-    fn expression(&mut self) -> Expression {
-        self.assignment()
+    fn add_expr(&mut self, expr: Expression) -> ExpressionId {
+        self.expression_arena.push(expr);
+        return self.expression_arena.len() - 1;
     }
 
-    fn assignment(&mut self) -> Expression {
+    fn expression(&mut self) -> ExpressionId {
         let mut expr = self.logical_or();
 
         if let Some(operator) = self.match_advance(&[
@@ -824,10 +816,10 @@ impl Parser {
             let rhs = self.expression();
 
             if operator == lexer::Token::Equal {
-                expr = Expression::Assignment {
-                    identifier: Box::new(expr),
-                    value: Box::new(rhs),
-                };
+                expr = self.add_expr(Expression::Assignment {
+                    identifier: expr,
+                    value: rhs,
+                });
             } else {
                 let new_operator = match operator {
                     lexer::Token::PlusEqual => lexer::Token::Plus,
@@ -843,40 +835,40 @@ impl Parser {
                     _ => unreachable!(),
                 };
 
-                let value = self.create_binary(expr.clone(), new_operator, rhs);
-                expr = Expression::Assignment {
-                    identifier: Box::new(expr),
-                    value: Box::new(value),
-                };
+                let value =  self.add_expr(Expression::Binary { lhs: expr, operator: new_operator, rhs });
+                expr = self.add_expr(Expression::Assignment {
+                    identifier: expr,
+                    value: value,
+                });
             }
         }
 
         return expr;
     }
 
-    fn logical_or(&mut self) -> Expression {
+    fn logical_or(&mut self) -> ExpressionId {
         let mut expr = self.logical_and();
 
         while let Some(operator) = self.match_advance(&[lexer::Token::DoublePipe][..]) {
             let rhs = self.logical_and();
-            expr = self.create_binary(expr, operator, rhs);
+            expr = self.add_expr(Expression::Binary { lhs: expr, operator, rhs });
         }
 
         return expr;
     }
 
-    fn logical_and(&mut self) -> Expression {
+    fn logical_and(&mut self) -> ExpressionId {
         let mut expr = self.comparison();
 
         while let Some(operator) = self.match_advance(&[lexer::Token::DoubleAmpersand][..]) {
             let rhs = self.comparison();
-            expr = self.create_binary(expr, operator, rhs);
+            expr = self.add_expr(Expression::Binary { lhs: expr, operator, rhs });
         }
 
         return expr;
     }
 
-    fn comparison(&mut self) -> Expression {
+    fn comparison(&mut self) -> ExpressionId {
         let mut expr = self.bitwise();
 
         if let Some(operator) = self.match_advance(&[
@@ -888,13 +880,13 @@ impl Parser {
             lexer::Token::BangEqual,
         ][..]) {
             let rhs = self.bitwise();
-            expr = self.create_binary(expr, operator, rhs);
+            expr = self.add_expr(Expression::Binary { lhs: expr, operator, rhs });
         }
 
         return expr;
     }
 
-    fn bitwise(&mut self) -> Expression {
+    fn bitwise(&mut self) -> ExpressionId {
         let mut expr = self.bitshift();
 
         while let Some(operator) = self.match_advance(&[
@@ -903,13 +895,13 @@ impl Parser {
             lexer::Token::Caret,
         ][..]) {
             let rhs = self.bitshift();
-            expr = self.create_binary(expr, operator, rhs);
+            expr = self.add_expr(Expression::Binary { lhs: expr, operator, rhs });
         }
 
         return expr;
     }
 
-    fn bitshift(&mut self) -> Expression {
+    fn bitshift(&mut self) -> ExpressionId {
         let mut expr = self.term();
 
         while let Some(operator) = self.match_advance(&[
@@ -917,24 +909,24 @@ impl Parser {
             lexer::Token::DoubleRightCaret,
         ][..]) {
             let rhs = self.term();
-            expr = self.create_binary(expr, operator, rhs);
+            expr = self.add_expr(Expression::Binary { lhs: expr, operator, rhs });
         }
 
         return expr;
     }
 
-    fn term(&mut self) -> Expression {
+    fn term(&mut self) -> ExpressionId {
         let mut expr = self.factor();
 
         while let Some(operator) = self.match_advance(&[lexer::Token::Plus, lexer::Token::Minus][..]) {
             let rhs = self.factor();
-            expr = self.create_binary(expr, operator, rhs);
+            expr = self.add_expr(Expression::Binary { lhs: expr, operator, rhs });
         }
 
         return expr;
     }
 
-    fn factor(&mut self) -> Expression {
+    fn factor(&mut self) -> ExpressionId {
         let mut expr = self.unary();
 
         while let Some(operator) = self.match_advance(&[
@@ -943,13 +935,13 @@ impl Parser {
             lexer::Token::Percent,
         ][..]) {
             let rhs = self.unary();
-            expr = self.create_binary(expr, operator, rhs);
+            expr = self.add_expr(Expression::Binary { lhs: expr, operator, rhs });
         }
 
         return expr;
     }
 
-    fn unary(&mut self) -> Expression {
+    fn unary(&mut self) -> ExpressionId {
         if let Some(operator) = self.match_advance(&[
             lexer::Token::Bang,
             lexer::Token::Tilde,
@@ -957,16 +949,20 @@ impl Parser {
             lexer::Token::Ampersand,
         ][..]) {
             let rhs = self.unary();
-            return self.create_unary(operator, rhs);
+            return self.add_expr(Expression::Unary { operator, member: rhs });
         }
 
         self.struct_constructor()
     }
 
-    fn struct_constructor(&mut self) -> Expression {
+    fn struct_constructor(&mut self) -> ExpressionId {
         let expr = self.postfix();
-        let Expression::Identifier(identifier) = &expr else {
-            return expr;
+        let identifier = {
+            let Expression::Identifier(identifier) = &self.expression_arena[expr] else {
+                return expr;
+            };
+
+            identifier.clone()
         };
 
         // ambigious syntax, make sure this isnt the pattern
@@ -981,7 +977,6 @@ impl Parser {
         // if foo <operator> bar {
         //      ...
         // }
-        //TODO: I dont love this solution, if i can find something better that would be great! 
         let Some(token) = self.peek(-2) else {
             return expr;
         };
@@ -1000,7 +995,7 @@ impl Parser {
             return expr;
         }
 
-        let mut members: HashMap<String, Expression> = HashMap::new();
+        let mut members: HashMap<String, ExpressionId> = HashMap::new();
         let mut comma: bool = true;
 
         if self.current() != lexer::Token::LCurly {
@@ -1025,13 +1020,13 @@ impl Parser {
         }
 
         self.advance(); // consume RCurly
-        return Expression::StructConstructor { 
+        self.add_expr(Expression::StructConstructor { 
             identifier: identifier.clone(), 
             members 
-        }
+        })
     }
 
-    fn postfix(&mut self) -> Expression {
+    fn postfix(&mut self) -> ExpressionId {
         let mut expr = self.primary();
         while self.token_match(&[
             lexer::Token::DotStar,
@@ -1039,12 +1034,12 @@ impl Parser {
             lexer::Token::LParen,
             lexer::Token::LBrace,
         ][..]) {
-            expr = match self.current() {
+            let out: Expression = match self.current() {
                 lexer::Token::DotStar => {
                     self.advance(); // consume operator
-                    return Expression::Unary { 
+                    Expression::Unary { 
                         operator: lexer::Token::DotStar, 
-                        member: Box::new(expr) 
+                        member: expr,
                     }
                 }
                 lexer::Token::Dot => {
@@ -1052,16 +1047,16 @@ impl Parser {
                     // let rhs_expr = self.primary();
                     let rhs = self.expect_identifier("rhs of dot operator must be an identifier");
                     Expression::Dot {
-                        lhs: Box::new(expr),
+                        lhs: expr,
                         rhs: rhs,
                     }
                 }
                 lexer::Token::LParen => {
                     self.advance(); // consume LParen
 
-                    let mut args: Vec<Box<Expression>> = Vec::new();
+                    let mut args: Vec<ExpressionId> = Vec::new();
                     while self.current() != lexer::Token::RParen {
-                        args.push(Box::new(self.expression()));
+                        args.push(self.expression());
                         if self.current() == lexer::Token::Comma {
                             self.advance();
                             continue;
@@ -1073,48 +1068,49 @@ impl Parser {
                         if self.current() != lexer::Token::RParen {
                             self.error("expected ',' or ')'");
                         }
+
                         break;
                     }
 
                     // Desugaring!
                     // foo.bar() -> foo.bar(&foo)
-                    match expr.clone() {
-                        Expression::Dot { lhs, rhs: _ } => {
-                            args.insert(0, Box::new(Expression::Unary { 
-                                operator: lexer::Token::Ampersand, 
-                                member: lhs.clone(),
-                            }));
-                        }
-                        _ => {}
+                    if let Expression::Dot { lhs, .. } = self.expression_arena[expr] {
+                        let self_ref = self.add_expr( Expression::Unary {
+                            operator: lexer::Token::Ampersand,
+                            member: lhs,
+                        });
+                        args.insert(0, self_ref);
                     };
 
                     // consume RParen
                     self.advance();
                     Expression::FunctionCall {
-                        identifier: Box::new(expr),
+                        identifier: expr,
                         args,
                     }
                 }
                 lexer::Token::LBrace => {
                     self.advance(); // consume LBrace
-                    let index = Box::new(self.expression());
+                    let index = self.expression();
                     self.consume(lexer::Token::RBrace, None);
 
                     Expression::ArrayAccess {
-                        identifier: Box::new(expr),
+                        identifier: expr,
                         index,
                     }
                 }
                 _ => unreachable!(),
-            }
+            };
+
+            expr = self.add_expr(out);
         }
 
         return expr;
     }
 
-    fn primary(&mut self) -> Expression {
+    fn primary(&mut self) -> ExpressionId {
         let token = self.next();
-        match token {
+        let expr = match token {
             lexer::Token::Null => Expression::Null,
             lexer::Token::IntLit(val) => Expression::Int(val),
             lexer::Token::FloatLit(val) => Expression::Float(val),
@@ -1128,13 +1124,11 @@ impl Parser {
 
                 return expr;
             }
-            lexer::Token::LBrace => {
-                let mut values: Vec<Box<Expression>> = Vec::new();
+            lexer::Token::LBrace => { // array constructor
+                let mut values: Vec<ExpressionId> = Vec::new();
                 let mut comma = true;
                 while self.current() != lexer::Token::RBrace {
-                    if !comma {
-                        self.error("expected comma");
-                    }
+                    if !comma { self.error("expected comma"); }
 
                     let val = self.expression();
                     comma = false;
@@ -1143,7 +1137,7 @@ impl Parser {
                         comma = true;
                     }
 
-                    values.push(Box::new(val));
+                    values.push(val);
                 }
 
                 self.advance(); // consumes RBrace
@@ -1156,8 +1150,54 @@ impl Parser {
             }
             _ => {
                 self.error("expected expression.");
-                return Expression::Null;
+                Expression::Null
             }
-        }
+        };
+
+        self.add_expr(expr)
     }
 }
+
+pub fn print_expressions(expression_arena: &Vec<Expression>) {
+    for (i, e) in expression_arena.iter().enumerate() {
+        println!("{i}: {:#?}", e);
+    }
+}
+
+pub fn print_ast(ast: &Vec<Statement>, expression_arena: &Vec<Expression>) {
+    println!("//// EXPRS ////");
+    print_expressions(expression_arena);
+    println!("///////////////");
+    println!();
+
+    for s in ast {
+        println!("{:#?}", s);
+    }
+}
+
+// fn print_statement(statement: &Statement, expression_arena: &Vec<Expression>) {
+//     match *statement {
+//         Statement::ParseError => unreachable!(),
+//         Statement::Block(statements) => {
+//             for s in statements {
+//                 print_statement(&s, expression_arena);
+//             }
+//         }
+//         Statement::VariableDeclaration { 
+//             identifier,
+//             variable_type,
+//             initial_value, 
+//             constant,
+//             public,
+//             global,
+//         } => {
+//
+//         }
+//         Statement::ExpressionStatement(e) => {},
+//     }
+// }
+// pub fn print_ast(ast: &Vec<Statement>, expression_arena: &Vec<Expression>) {
+//     for statement in ast {
+//         print_statement(statement, expression_arena);
+//     }
+// }
