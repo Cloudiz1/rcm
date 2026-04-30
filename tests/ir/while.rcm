@@ -1,8 +1,8 @@
-fn main() void {
+fn main() i32 {
 	let i = 0;
 	while i < 3 {
 		i += 1;
 	}
 
-	let foo = i * 2;
+	return i * 2;
 }

@@ -7,9 +7,6 @@ pub mod parser;
 pub mod analysis;
 pub mod ir;
 
-// for lsp highlighting
-// pub mod ir_bak;
-
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() == 1 {
@@ -28,14 +25,16 @@ fn main() {
     // lexer::print_tokens(tokens.clone());
 
     let mut parser = parser::Parser::new(tokens, lines, args[1].clone());
-    let Some(ast) = parser.parse() else {
+    let Some((ast, expression_arena)) = parser.parse() else {
         return;
     };
 
-    let mut analyzer = analysis::Analyzer::new();
-    let globals = analyzer.analyze(ast.clone());
+    parser::print_ast(&ast, &expression_arena);
 
-    let mut ssa = ir::SSA::new(globals);
+    let mut analyzer = analysis::Analyzer::new(&expression_arena);
+    let globals = analyzer.analyze(&ast);
+
+    let mut ssa = ir::SSA::new(globals, expression_arena);
     ssa.ir_gen(ast);
     ssa.print_ids();
     ssa.print_blocks();

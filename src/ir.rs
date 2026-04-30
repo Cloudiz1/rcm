@@ -116,17 +116,6 @@ pub enum Value {
     UNDEF,
 }
 
-// handles dot operators
-fn expr_to_string(expr: parser::Expression) -> String {
-    match expr {
-        parser::Expression::Identifier(s) => s,
-        parser::Expression::Dot {
-            lhs, rhs
-        } => std::format!("{}.{}", expr_to_string(*lhs), rhs),
-       _ => panic!("internal error: can not convert {:?} to a string", expr),
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Block {
     pub name: &'static str,
@@ -159,6 +148,8 @@ impl Block {
 }
 
 pub struct SSA {
+    expression_arena: Vec<parser::Expression>, 
+
     blocks: Vec<Block>,
     values: Vec<Value>, 
     values_table: HashMap<Value, ValueId>, // for LVN
@@ -175,8 +166,10 @@ pub struct SSA {
 }
 
 impl SSA {
-    pub fn new(globals: HashMap<String, analysis::Symbol>) -> Self {
+    pub fn new(globals: HashMap<String, analysis::Symbol>, expression_arena: Vec<parser::Expression>) -> Self {
         Self {
+            expression_arena,
+
             blocks: Vec::new(),
             values: Vec::new(),
             values_table: HashMap::new(),
@@ -342,6 +335,17 @@ impl SSA {
 
 // the more 'TAC' like stuff
 impl SSA {
+    // handles dot operators
+    fn expr_to_string(&self, expr: parser::ExpressionId) -> String {
+        match &self.expression_arena[expr] {
+            parser::Expression::Identifier(s) => s.clone(),
+            parser::Expression::Dot {
+                lhs, rhs
+            } => std::format!("{}.{}", self.expr_to_string(*lhs), rhs),
+        _ => panic!("internal error: can not convert {:?} to a string", expr),
+        }
+    }
+
     /// handles structs and normal variables, instead of just variables
     // fn write_variable_complete(&mut self, identifier: String, val: ValueId) {
     //     if matches!(self.values[val], Value::Struct { .. }) {
@@ -437,12 +441,14 @@ impl SSA {
                 ..
             } => {
                 if let Some(e) = initial_value { // if it exists just reuse assignment code
-                    let assignement = parser::Expression::Assignment { 
-                        identifier: Box::new(parser::Expression::Identifier(identifier)),
-                        value: Box::new(e) 
-                    };
+                    let index = self.expression_arena.len();
+                    self.expression_arena.push(parser::Expression::Identifier(identifier));
+                    self.expression_arena.push(parser::Expression::Assignment { 
+                        identifier: index,
+                        value: e,
+                    });
 
-                    self.expr(assignement);
+                    self.expr(index + 1);
                     return;
                 }
 
@@ -454,12 +460,13 @@ impl SSA {
                 block 
             } => {
                 let entry = self.add_block(Block::new("while entry"));
-                self.create_edge(self.pred.unwrap(), entry);
+                self.create_edge(self.pred.unwrap() - 1, entry);
+
                 self.expr(condition);
                 self.blocks[entry].filled = true; // NOT SEALED
 
                 self.statement(*block, "while body"); 
-                self.create_edge(entry, self.pred.unwrap()); // loop to while header
+                self.create_edge(self.pred.unwrap(), entry); // loop to while header
                 self.seal_block(entry);
 
                 // we need the next block to attach the entry
@@ -519,8 +526,8 @@ impl SSA {
         }
     }
 
-    fn expr(&mut self, expr: parser::Expression) -> ValueId {
-        match expr {
+    fn expr(&mut self, expr: parser::ExpressionId) -> ValueId {
+        match self.expression_arena[expr].clone() {
             parser::Expression::Int(i) => self.add_value(Value::Int(i)),
             parser::Expression::Float(f) => self.add_value(Value::Float(HashableFloat(f))),
             parser::Expression::Bool(b) => self.add_value(Value::Bool(b)),
@@ -561,8 +568,8 @@ impl SSA {
                     _ => panic!("internal error: invalid operator"),
                 };
                 
-                let new_lhs = self.expr(*lhs);
-                let new_rhs = self.expr(*rhs);
+                let new_lhs = self.expr(lhs);
+                let new_rhs = self.expr(rhs);
                 let val = Value::Binary { op, lhs: new_lhs, rhs: new_rhs };
                 let id = self.add_value(val);
 
@@ -574,7 +581,7 @@ impl SSA {
                 operator, 
                 member 
             } => {
-                let new_member = self.expr(*member);
+                let new_member = self.expr(member);
 
                 match operator {
                     lexer::Token::Ampersand => {
@@ -605,7 +612,7 @@ impl SSA {
                 self.read_variable(name, self.pred.unwrap())
             }
             parser::Expression::Dot { lhs, rhs } => {
-                let base = self.expr(*lhs);
+                let base = self.expr(lhs);
                 return 0;
             }
             parser::Expression::Assignment { 
@@ -616,25 +623,26 @@ impl SSA {
                 // TODO: find candinates for SROA (no direct memory access, not
                 // passed as a "reference" to a function, fewer than 16 members)
 
-                if let parser::Expression::Identifier(name) = *identifier.clone() {
-                    let val = self.expr(*value.clone());
-                    self.write_variable(name, self.pred.unwrap(), val);
+                // TODO: get rid of that clone pretty please
+                if let parser::Expression::Identifier(name) = self.expression_arena[identifier].clone() {
+                    let val = self.expr(value);
+                    self.write_variable(name.clone(), self.pred.unwrap(), val);
                 }
                 
                 // p.* = foo;
-                if matches!(*identifier, parser::Expression::Unary { operator: lexer::Token::DotStar, .. }) {
-                    let address = self.expr(*identifier);
-                    let val = self.expr(*value);
+                if matches!(self.expression_arena[identifier], parser::Expression::Unary { operator: lexer::Token::DotStar, .. }) {
+                    let address = self.expr(identifier);
+                    let val = self.expr(value);
                     let inst = self.add_value(Value::Store { address, value: val });
                     self.add_inst(self.pred.unwrap(), inst);
                     return 0;
                 }
 
                 // arr[i] = foo;
-                if let parser::Expression::ArrayAccess { identifier, index } = *identifier {
-                    let access = Value::GetElmPtr { base: self.expr(*identifier), index: self.expr(*index) };
+                if let parser::Expression::ArrayAccess { identifier, index } = self.expression_arena[identifier] {
+                    let access = Value::GetElmPtr { base: self.expr(identifier), index: self.expr(index) };
                     let gep = self.add_value(access);
-                    let rhs = self.expr(*value);
+                    let rhs = self.expr(value);
 
                     let store = self.add_value(Value::Store {
                         address: gep,
@@ -649,12 +657,15 @@ impl SSA {
                 // arr[0] = ..
                 // arr[1] = ..
                 // ...
-                if matches!(*value, parser::Expression::ArrayConstructor { .. }) { // matches! to save a clone
-                    let parser::Expression::ArrayConstructor { values } = *value else { unreachable!() };
+                if matches!(self.expression_arena[value], parser::Expression::ArrayConstructor { .. }) { // matches! to save a clone
+                    let parser::Expression::ArrayConstructor { values } = self.expression_arena[value].clone() else { unreachable!() };
                     for (i, value) in values.into_iter().enumerate() {
-                        let index = parser::Expression::ArrayAccess { identifier: identifier.clone(), index: Box::new(parser::Expression::Int(i as i64)) };
-                        let assignment = parser::Expression::Assignment { identifier: Box::new(index), value };
-                        self.expr(assignment);
+                        // its weird but it this creates a bunch of assignments for an array constructor
+                        let index = self.expression_arena.len();
+                        self.expression_arena.push(parser::Expression::Int(i as i64));
+                        self.expression_arena.push(parser::Expression::ArrayAccess { identifier, index });
+                        self.expression_arena.push(parser::Expression::Assignment { identifier: index + 1, value });
+                        self.expr(index + 2);
                     }
 
                     return 0; 
@@ -664,9 +675,9 @@ impl SSA {
                 //      x: 1,
                 //      y: 2,
                 // };
-                if matches!(*value, parser::Expression::StructConstructor { .. }) {
-                    let base = self.expr(*identifier);
-                    let constructor = self.expr(*value);
+                if matches!(self.expression_arena[value], parser::Expression::StructConstructor { .. }) {
+                    let base = self.expr(identifier);
+                    let constructor = self.expr(value);
 
                     let Value::Struct{ identifier: struct_name , members } = self.values[constructor].clone() else { unreachable!() };
                     for (i, member) in members.into_iter().enumerate() {
@@ -684,8 +695,8 @@ impl SSA {
             parser::Expression::FunctionCall {
                 identifier, args
             } => {
-                let name = expr_to_string(*identifier);
-                let args = args.iter().map(|x| self.expr(*x.clone())).collect::<Vec<ValueId>>();
+                let name = self.expr_to_string(identifier);
+                let args = args.iter().map(|x| self.expr(*x)).collect::<Vec<ValueId>>();
                 let call = self.add_value(Value::Call { name, args });
                 self.add_inst(self.pred.unwrap(), call);
                 return call;
@@ -693,7 +704,7 @@ impl SSA {
             parser::Expression::ArrayConstructor {
                 values
             } => {
-                let elements = values.iter().map(|x| self.expr(*x.clone())).collect::<Vec<ValueId>>();
+                let elements = values.iter().map(|x| self.expr(*x)).collect::<Vec<ValueId>>();
                 return self.add_value(Value::Array { elements });
             },
             parser::Expression::ArrayAccess {
@@ -701,7 +712,7 @@ impl SSA {
             } => {
                 // TODO: yeah this doesn't work at all with ptr arithmatic but thats not important right now
                 // TODO: and no more expr to sring!
-                let access = Value::GetElmPtr { base: self.expr(*identifier), index: self.expr(*index) };
+                let access = Value::GetElmPtr { base: self.expr(identifier), index: self.expr(index) };
                 let inst = self.add_value(access);
                 let load = self.add_value(Value::Load(inst));
                 return load;
@@ -753,6 +764,8 @@ impl SSA {
             print!("<{inst}>");
             return;
         }
+
+        prev_insts.push(inst);
 
         match &self.values[inst] {
             Value::Int(v) => print!("{}", v),
@@ -823,7 +836,6 @@ impl SSA {
             Value::Phi { block, operands } => {
                 print!("phi(");
                 for (i, op) in operands.iter().enumerate() {
-                    prev_insts.push(*op);
                     self.print_instruction(*op, prev_insts.clone()); 
                     if i != operands.len() - 1 { print!(", ") };
                 }
@@ -845,7 +857,6 @@ impl SSA {
             Value::Struct { identifier, members } => {
                 print!("struct{{");
                 for (i, member) in members.iter().enumerate() {
-                    // TODO: this might lead to recursive printing with pointers :pensive:
                     self.print_instruction(member.clone(), prev_insts.clone());
                     if i != members.len() - 1 { print!(", ") }
                 }

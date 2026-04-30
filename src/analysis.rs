@@ -67,113 +67,6 @@ impl Type for Symbol {
     }
 }
 
-fn create_symbol_entry(statement: parser::Statement) -> (String, Symbol) {
-    match statement {
-        parser::Statement::FunctionDeclaration { 
-            name, 
-            return_type, 
-            parameters, 
-            body, 
-            public 
-        } => {
-            let mut params: Vec<parser::Type> = Vec::new();
-            for param in parameters {
-                let parser::Statement::Parameter { name: _, t } = *param else {
-                    unreachable!();
-                };
-
-                params.push(t);
-            }
-
-            return (
-                name, 
-                Symbol::Function { 
-                    public, 
-                    return_type, 
-                    params 
-                }
-            );
-        }
-        parser::Statement::Parameter { name, t } => {
-            return (
-                name,
-                Symbol::Variable { 
-                    public: false, 
-                    constant: false, 
-                    variable_type: t, 
-                }
-            )
-        }
-        parser::Statement::StructDeclaration { 
-            name, 
-            members, 
-            methods, 
-            public 
-        } => {
-            let mut names: Vec<String> = Vec::new();
-            let mut symbol_members: HashMap<String, Symbol> = HashMap::new();
-            for member in members {
-                let (member_name, symbol) = create_symbol_entry(*member);
-                if contains_defintion(&symbol_members, &member_name) {
-                    panic!("cannot redefine member {} in struct {}", member_name, name);
-                }
-                
-                names.push(member_name.clone());
-                symbol_members.insert(member_name, symbol);
-            }
-
-            let mut symbol_methods: HashMap<String, Symbol> = HashMap::new();
-            for method in methods {
-                let (method_name, symbol) = create_symbol_entry(*method);
-                if contains_defintion(&symbol_members, &method_name) {
-                    panic!("cannot redefine method {} in struct {}", method_name, name);
-                }
-
-                symbol_methods.insert(method_name, symbol);
-            }
-
-            return (
-                name.clone(),
-                Symbol::Struct { 
-                    public, 
-                    names,
-                    members: symbol_members, 
-                    methods: symbol_methods,
-                    typedef: name,
-                }
-            )
-        }
-        parser::Statement::Member { 
-            name, 
-            t, 
-            public 
-        } => {
-            return (name, Symbol::Member(t));
-        }
-        parser::Statement::VariableDeclaration { 
-            identifier, 
-            variable_type, 
-            initial_value, 
-            constant, 
-            public, 
-            global 
-        } => {
-            let Some(t) = variable_type else {
-                unreachable!("all types should be known before calling create_symbol_entry()");
-            };
-
-            return (
-                identifier,
-                Symbol::Variable { 
-                    public, 
-                    constant, 
-                    variable_type: t,
-                }
-            )
-        }
-        _ => panic!("can not create symbol from: {:?}", statement),
-    }
-}
 
 fn contains_defintion(table: &HashMap<String, Symbol>, identifier: &String) -> bool {
     if let Some(_) = table.get(identifier) {
@@ -194,8 +87,8 @@ fn check_definition(tables: &Vec<HashMap<String, Symbol>>, identifier: &String) 
     return false;
 }
 
-fn allowed_implicit_coercion(lhs: parser::Type, rhs: parser::Type) {
-    if lhs == rhs {
+fn allowed_implicit_coercion(lhs: &parser::Type, rhs: &parser::Type) {
+    if *lhs == *rhs {
         return
     }
 
@@ -213,101 +106,236 @@ fn allowed_implicit_coercion(lhs: parser::Type, rhs: parser::Type) {
         parser::Type::F64,
     ];
 
-    if NUMBERS.contains(&lhs) && NUMBERS.contains(&rhs) {
+    if NUMBERS.contains(lhs) && NUMBERS.contains(rhs) {
         return;
     }
 
-    panic!("can not convert from type {} to type {}", lhs, rhs);
+    panic!("can not convert from type {} to type {}", *lhs, *rhs);
 }
 
-fn condition_always_true(condition: parser::Expression) -> bool {
-    // there may be other cases, but right now im really only looking at infinite loops
-    match condition {
-        parser::Expression::Bool(val) => return val == true,
-        _ => false,
-    }
-}
 
-/* always param is used for infinite loops, imagine:
- * ```
- * let i = 0;
- *  while true {
- *      // side effects...
- *      if i == 3 {
- *          return;
- *      }
- *  }
- *  ```
- *  the inner block won't always return, but there IS a return
- *  and infinite loops are allowed
- */
-// do NOT call this function if return type is void
-fn check_branch_return(block: parser::Statement, always: bool) -> bool {
-    match block {
-        parser::Statement::Return { .. } => return true,
-        parser::Statement::Block(statements) => {
-            for statement in statements {
-                if check_branch_return(*statement, always) {
-                    return true;
-                }
-            }
-            
-            return false;
-        }
-        parser::Statement::IfStatement { 
-            condition, 
-            block, 
-            alt 
-        } => {
-            if condition_always_true(condition) {
-                return check_branch_return(*block, always);
-            }
-
-            if let Some(else_block) = alt {
-                return check_branch_return(*block, always) && check_branch_return(*else_block, always);
-            }
-
-            if !always {
-                return check_branch_return(*block, always);
-            }
-
-            return false;
-        }
-        parser::Statement::WhileStatement { 
-            condition, 
-            block 
-        } => {
-            if condition_always_true(condition) {
-                // refer to comment above func decl
-                return check_branch_return(*block, false);
-            }
-
-            if !always {
-                return check_branch_return(*block, always);
-            }
-
-            return false;
-        }
-        _ => return false,
-    }
-}
-
-pub struct Analyzer {
+pub struct Analyzer <'a>{
     tables: Vec<HashMap<String, Symbol>>,
+    expression_arena: &'a Vec<parser::Expression>,
     // sizes: HashMap<parser::Type, usize>,
 }
 
 // Types
-impl Analyzer {
-    fn get_symbol_dot(&mut self, expression: &parser::Expression) -> Symbol {
-        let parser::Expression::Dot { 
-            lhs, 
-            rhs 
-        } = expression else {
-            unreachable!("Analyzer::get_symbol_dot(..) must be called with a dot node.");
+impl<'a> Analyzer<'a> {
+    pub fn new(expression_arena: &'a Vec<parser::Expression>) -> Self {
+        // let mut sizes: HashMap<parser::Type, usize> = HashMap::new();
+        // sizes.insert(parser::Type::I8, 1);
+        // sizes.insert(parser::Type::U8, 1);
+        // sizes.insert(parser::Type::I16, 2);
+        // sizes.insert(parser::Type::U16, 2);
+        // sizes.insert(parser::Type::I32, 4);
+        // sizes.insert(parser::Type::U32, 4);
+        // sizes.insert(parser::Type::I64, 8);
+        // sizes.insert(parser::Type::U64, 8);
+        // sizes.insert(parser::Type::F16, 2);
+        // sizes.insert(parser::Type::F32, 4);
+        // sizes.insert(parser::Type::F64, 8);
+        // sizes.insert(parser::Type::Bool, 1);
+        // sizes.insert(parser::Type::Char, 4);
+        // sizes.insert(parser::Type::Pointer(), 4);
+
+        Self {
+            tables: Vec::new(),
+            expression_arena,
+            // sizes
+        } 
+    }
+
+    fn create_symbol_entry(&self, statement: &parser::Statement) -> (String, Symbol) {
+        match statement {
+            parser::Statement::FunctionDeclaration { 
+                name, 
+                return_type, 
+                parameters, 
+                body, 
+                public 
+            } => {
+                let mut params: Vec<parser::Type> = Vec::new();
+                for param in parameters {
+                    let parser::Statement::Parameter { name: _, t } = *param.clone() else {
+                        unreachable!();
+                    };
+
+                    params.push(t);
+                }
+
+                return (
+                    name.clone(),
+                    Symbol::Function { 
+                        public: *public, 
+                        return_type: return_type.clone(), 
+                        params 
+                    }
+                );
+            }
+            parser::Statement::Parameter { name, t } => {
+                return (
+                    name.clone(),
+                    Symbol::Variable { 
+                        public: false, 
+                        constant: false, 
+                        variable_type: t.clone(), 
+                    }
+                )
+            }
+            parser::Statement::StructDeclaration { 
+                name, 
+                members, 
+                methods, 
+                public 
+            } => {
+                let mut names: Vec<String> = Vec::new();
+                let mut symbol_members: HashMap<String, Symbol> = HashMap::new();
+                for member in members {
+                    let (member_name, symbol) = self.create_symbol_entry(&member);
+                    if contains_defintion(&symbol_members, &member_name) {
+                        panic!("cannot redefine member {} in struct {}", member_name, name);
+                    }
+                    
+                    names.push(member_name.clone());
+                    symbol_members.insert(member_name, symbol);
+                }
+
+                let mut symbol_methods: HashMap<String, Symbol> = HashMap::new();
+                for method in methods {
+                    let (method_name, symbol) = self.create_symbol_entry(&method);
+                    if contains_defintion(&symbol_members, &method_name) {
+                        panic!("cannot redefine method {} in struct {}", method_name, name);
+                    }
+
+                    symbol_methods.insert(method_name, symbol);
+                }
+
+                return (
+                    name.clone(),
+                    Symbol::Struct { 
+                        public: *public, 
+                        names,
+                        members: symbol_members, 
+                        methods: symbol_methods,
+                        typedef: name.clone(),
+                    }
+                )
+            }
+            parser::Statement::Member { 
+                name, 
+                t, 
+                public 
+            } => {
+                return (name.clone(), Symbol::Member(t.clone()));
+            }
+            parser::Statement::VariableDeclaration { 
+                identifier, 
+                variable_type, 
+                initial_value, 
+                constant, 
+                public, 
+                global 
+            } => {
+                let Some(t) = variable_type else {
+                    unreachable!("all types should be known before calling create_symbol_entry()");
+                };
+
+                return (
+                    identifier.clone(),
+                    Symbol::Variable { 
+                        public: *public, 
+                        constant: *constant, 
+                        variable_type: t.clone(),
+                    }
+                )
+            }
+            _ => panic!("can not create symbol from: {:?}", statement),
+        }
+    }
+
+    fn condition_always_true(&self, condition: parser::ExpressionId) -> bool {
+        // there may be other cases, but right now im really only looking at infinite loops
+        match self.expression_arena[condition] {
+            parser::Expression::Bool(val) => val == true,
+            _ => false,
+        }
+    }
+
+    /* always param is used for infinite loops, imagine:
+    * ```
+    * let i = 0;
+    *  while true {
+    *      // side effects...
+    *      if i == 3 {
+    *          return;
+    *      }
+    *  }
+    *  ```
+    *  the inner block won't always return, but there IS a return
+    *  and infinite loops are allowed
+    */
+    // do NOT call this function if return type is void
+    fn check_branch_return(&self, block: parser::Statement, always: bool) -> bool {
+        match block {
+            parser::Statement::Return { .. } => return true,
+            parser::Statement::Block(statements) => {
+                for statement in statements {
+                    if self.check_branch_return(*statement, always) {
+                        return true;
+                    }
+                }
+                
+                return false;
+            }
+            parser::Statement::IfStatement { 
+                condition, 
+                block, 
+                alt 
+            } => {
+                if self.condition_always_true(condition) {
+                    return self.check_branch_return(*block, always);
+                }
+
+                if let Some(else_block) = alt {
+                    return self.check_branch_return(*block, always) && self.check_branch_return(*else_block, always);
+                }
+
+                if !always {
+                    return self.check_branch_return(*block, always);
+                }
+
+                return false;
+            }
+            parser::Statement::WhileStatement { 
+                condition, 
+                block 
+            } => {
+                if self.condition_always_true(condition) {
+                    // refer to comment above func decl
+                    return self.check_branch_return(*block, false);
+                }
+
+                if !always {
+                    return self.check_branch_return(*block, always);
+                }
+
+                return false;
+            }
+            _ => return false,
+        }
+    }
+
+    fn get_symbol_dot(&mut self, expr: parser::ExpressionId) -> Symbol {
+        let lhs = {
+            let parser::Expression::Dot { lhs, .. } = &self.expression_arena[expr] else {
+                unreachable!("Analyzer::get_symbol_dot(..) must be called with a dot node.");
+            };
+
+            *lhs
         };
 
-        let lhs_type = self.get_type(&lhs);
+        let lhs_type = self.get_type(lhs);
         let parser::Type::Struct(identifier) = lhs_type.clone() else {
             panic!("dot operator can not be applied to type {}", lhs_type);
         };
@@ -323,6 +351,10 @@ impl Analyzer {
             typedef,
         } = lhs_symbol else {
             panic!("expected struct type, found type {}", lhs_type);
+        };
+
+        let parser::Expression::Dot { rhs, .. } = &self.expression_arena[expr] else {
+            unreachable!();
         };
 
         if let Some(member) = members.get(rhs) {
@@ -347,8 +379,8 @@ impl Analyzer {
         panic!("{}", msg);
     }
 
-    fn get_type(&mut self, expr: &parser::Expression) -> parser::Type {
-        match expr {
+    fn get_type(&mut self, expr: parser::ExpressionId) -> parser::Type {
+        match self.expression_arena[expr].clone() {
             parser::Expression::Null => parser::Type::Void,
             parser::Expression::Int(_) => parser::Type::I32,
             parser::Expression::Float(_) => parser::Type::F64,
@@ -399,7 +431,7 @@ impl Analyzer {
                 
                 return lhs_type;
             }
-            expr @ parser::Expression::Dot { .. } => {
+            parser::Expression::Dot { .. } => {
                 return self.get_symbol_dot(expr).get_type();
             }
             parser::Expression::Assignment { identifier, value } => {
@@ -416,13 +448,13 @@ impl Analyzer {
                 identifier, 
                 args 
             } => {
-                let symbol = match *identifier.clone() {
+                let symbol = match &self.expression_arena[identifier] {
                     parser::Expression::Identifier(name) => {
                         let msg = &std::format!("unrecognized function {}", name);
                         self.get_symbol(&name, msg)
                     }
-                    expr @ parser::Expression::Dot { .. } => {
-                        self.get_symbol_dot(&expr)
+                    parser::Expression::Dot { .. } => {
+                        self.get_symbol_dot(expr)
                     }
                     _ => unimplemented!("function pointers do not exist"),
                 };
@@ -436,7 +468,7 @@ impl Analyzer {
                 };
 
                 for (arg, expected) in std::iter::zip(args.clone(), params) {
-                    let arg_type = self.get_type(&arg);
+                    let arg_type = self.get_type(arg);
                     if arg_type != expected {
                         panic!("expected argument of type {}, found type {}", expected, arg_type);
                     }
@@ -458,7 +490,8 @@ impl Analyzer {
                 return *t;
             }
             parser::Expression::ArrayConstructor { values } => {
-                let expected_type = self.get_type(&values[0]);
+                let expected_type = self.get_type(values[0]);
+                let len = values.len();
                 for value in values {
                     if !variant_eq(&expected_type, &self.get_type(value)) {
                         panic!("all expressions in array constructor must have the same type.");
@@ -467,14 +500,14 @@ impl Analyzer {
 
                 return parser::Type::Array { 
                     t: Box::new(expected_type), 
-                    size: Some(values.len()) 
+                    size: Some(len) 
                 };
             }
             parser::Expression::StructConstructor { 
                 identifier, 
                 members 
             } => {
-                let symbol = self.get_symbol(identifier, "unrecognized struct");
+                let symbol = self.get_symbol(&identifier, "unrecognized struct");
                 let Symbol::Struct { 
                     public, 
                     names,
@@ -501,7 +534,7 @@ impl Analyzer {
                 }
 
                 for (member_name, member_val) in members {
-                    let Some(defined_member_symbol) = defined_members.get(member_name) else {
+                    let Some(defined_member_symbol) = defined_members.get(&member_name) else {
                         panic!("unrecognized struct member");
                     };
 
@@ -518,8 +551,8 @@ impl Analyzer {
     }
 }
 
-impl Analyzer {
-    fn analyze_statement(&mut self, statement: parser::Statement, function_return: &Option<parser::Type>) {
+impl<'a> Analyzer<'a> {
+    fn analyze_statement(&mut self, statement: &parser::Statement, function_return: &Option<parser::Type>) {
         match statement {
             parser::Statement::FunctionDeclaration { 
                 name, 
@@ -530,25 +563,25 @@ impl Analyzer {
             } => {
                 self.add_table();
                 for param in parameters {
-                    self.add_symbol(*param);
+                    self.add_symbol(param);
                 }
 
                 match return_type {
                     parser::Type::Void => {}
                     _ => {
-                        if !check_branch_return(*body.clone(), true) {
+                        if !self.check_branch_return(*body.clone(), true) {
                             panic!("expected return of type {}, found no return", return_type);
                         }
                     }
                 };
 
-                self.analyze_statement(*body, &Some(return_type));
+                self.analyze_statement(body, &Some(return_type.clone()));
                 self.remove_table();
             }
             parser::Statement::Return { value } => {
                 let return_type = match value { // get type on rhs
                     None => parser::Type::Void,
-                    Some(v) => self.get_type(&v),
+                    Some(v) => self.get_type(*v),
                 };
                 
                 let Some(expected_return) = function_return else {
@@ -564,89 +597,67 @@ impl Analyzer {
                 block, 
                 alt 
             } => {
-                let condition_type = self.get_type(&condition);
+                let condition_type = self.get_type(*condition);
                 // TODO:
                 // if foo { .. } (maybe just `if foo { .. }` -> `if foo == null { .. }`?)
                 if !variant_eq(&condition_type, &parser::Type::Bool) {
                     panic!("condition must contain bool expression");
                 }
 
-                self.analyze_statement(*block, function_return);
+                self.analyze_statement(block, function_return);
                 if let Some(else_block) = alt {
-                    self.analyze_statement(*else_block, function_return);
+                    self.analyze_statement(else_block, function_return);
                 }
             }
             parser::Statement::Block(statements) => {
                 self.add_table();
                 for statement in statements {
-                    self.analyze_statement(*statement, function_return);
+                    self.analyze_statement(statement, function_return);
                 }
                 self.remove_table();
             }
             parser::Statement::VariableDeclaration { 
                 identifier, 
-                mut variable_type, 
+                variable_type, 
                 initial_value, 
                 constant, 
                 public, 
                 global 
             } => {
+                let mut new_var_type = variable_type.clone();
                 if let Some(rhs) = initial_value.clone() {
-                    let rhs_type = self.get_type(&rhs);
-                    if let Some(var_type) = variable_type.clone() {
-                        allowed_implicit_coercion(var_type, rhs_type);
+                    let rhs_type = self.get_type(rhs);
+                    if let Some(ref var_type) = new_var_type {
+                        allowed_implicit_coercion(var_type, &rhs_type);
                     } else {
-                        variable_type = Some(rhs_type);
+                        new_var_type = Some(rhs_type);
                     }
                 } else {
-                    let Some(_) = variable_type else {
+                    let Some(_) = new_var_type else {
                         panic!("type of variable {} must be known at compile time.", identifier);
                     };
                 }
 
                 let var = parser::Statement::VariableDeclaration { 
-                    identifier, 
-                    variable_type, 
-                    initial_value, 
-                    constant, 
-                    public, 
-                    global 
+                    identifier: identifier.clone(), 
+                    variable_type: new_var_type, 
+                    initial_value: *initial_value, 
+                    constant: *constant, 
+                    public: *public,
+                    global: *global,
                 };
 
-                self.add_symbol(var);
+                self.add_symbol(&var);
             }
             parser::Statement::ExpressionStatement(expr) => {
-                self.get_type(&expr);
+                self.get_type(*expr);
             }
-            _ => {}
+            _ => (),
         }
     }
 }
 
-impl Analyzer {
-    pub fn new() -> Self {
-        // let mut sizes: HashMap<parser::Type, usize> = HashMap::new();
-        // sizes.insert(parser::Type::I8, 1);
-        // sizes.insert(parser::Type::U8, 1);
-        // sizes.insert(parser::Type::I16, 2);
-        // sizes.insert(parser::Type::U16, 2);
-        // sizes.insert(parser::Type::I32, 4);
-        // sizes.insert(parser::Type::U32, 4);
-        // sizes.insert(parser::Type::I64, 8);
-        // sizes.insert(parser::Type::U64, 8);
-        // sizes.insert(parser::Type::F16, 2);
-        // sizes.insert(parser::Type::F32, 4);
-        // sizes.insert(parser::Type::F64, 8);
-        // sizes.insert(parser::Type::Bool, 1);
-        // sizes.insert(parser::Type::Char, 4);
-        // sizes.insert(parser::Type::Pointer(), 4);
-
-        Self {
-            tables: Vec::new(),
-            // sizes
-        } 
-    }
-
+impl<'a> Analyzer<'a> {
     fn add_table(&mut self) {
         self.tables.push(HashMap::new());
     }
@@ -660,8 +671,8 @@ impl Analyzer {
         &mut self.tables[i]
     }
 
-    fn add_symbol(&mut self, statement: parser::Statement) {
-        let (name, symbol) = create_symbol_entry(statement);
+    fn add_symbol(&mut self, statement: &parser::Statement) {
+        let (name, symbol) = self.create_symbol_entry(statement);
         if check_definition(&self.tables, &name) {
             panic!("cannot redefine identifier {}", name);
         }
@@ -669,7 +680,7 @@ impl Analyzer {
         self.get_current_table().insert(name, symbol);
     }
 
-    fn get_globals(&mut self, ast: Vec<parser::Statement>) {
+    fn get_globals(&mut self, ast: &Vec<parser::Statement>) {
         self.add_table();
         for statement in ast {
             match statement {
@@ -681,8 +692,8 @@ impl Analyzer {
         }
     }
 
-    pub fn analyze(&mut self, ast: Vec<parser::Statement>) -> HashMap<String, Symbol> {
-        self.get_globals(ast.clone());
+    pub fn analyze(&mut self, ast: &Vec<parser::Statement>) -> HashMap<String, Symbol> {
+        self.get_globals(ast);
 
         for statement in ast {
             self.analyze_statement(statement, &None);
