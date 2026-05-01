@@ -928,8 +928,6 @@ impl Parser {
 
     fn factor(&mut self) -> ExpressionId {
         let mut expr = self.unary();
-        dbg!(&self.expression_arena[expr]);
-        dbg!(self.current());
 
         while let Some(operator) = self.match_advance(&[
             lexer::Token::Star,
@@ -1161,16 +1159,16 @@ impl Parser {
 }
 
 pub fn print_expressions(expression_arena: &Vec<Expression>) {
+    println!("//// EXPRS ////");
     for (i, e) in expression_arena.iter().enumerate() {
         println!("{i}: {:#?}", e);
     }
+    println!("///////////////");
+    println!();
 }
 
 pub fn print_ast(ast: &Vec<Statement>, expression_arena: &Vec<Expression>) {
-    println!("//// EXPRS ////");
     print_expressions(expression_arena);
-    println!("///////////////");
-    println!();
 
     for s in ast {
         println!("{:#?}", s);

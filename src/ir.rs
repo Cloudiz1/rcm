@@ -514,8 +514,8 @@ impl SSA {
             Statement::Member { .. } => return,
             Statement::Return { value } => {
                 if let Some(val) = value {
-                    dbg!(&self.expression_arena[val]);
                     let ret = self.expr(val);
+                    dbg!(&ret);
                     self.returns.push(ret);
                 }
 
@@ -611,13 +611,37 @@ impl SSA {
                 self.read_variable(name, self.pred.unwrap())
             }
             parser::Expression::Dot { lhs, rhs } => {
-                let base = self.expr(lhs);
-                return 0;
+                // look up lhs, get its type, get its symbol, create a load instruction with a GEP, recurse
+                // two cases. lhs is a simple struct, or its another dot operator
+                // case 1: look up once, create inst, return
+                // case 2: lookup, recurse, return
+
+                let parent_type = self.expr_types.get(&lhs).unwrap();
+                if let parser::Type::Struct(typedef) = parent_type {
+                    let struct_type = self.symbols.get(typedef).unwrap();
+                    let analysis::Symbol::Struct { names, .. } = struct_type else { unreachable!() };
+                    let mut index: usize = usize::MAX;
+
+                    for (i, name) in names.iter().enumerate() { // find offset
+                        if *name != rhs { continue }
+                        index = i;
+                        break;
+                    }
+
+                    std::debug_assert_ne!(index, usize::MAX);
+                    let parent = self.expr(lhs);
+                    let gep = self.add_value(Value::GetElmPtr { base: parent, index });
+                    return self.add_value(Value::Load(gep));
+                } 
+
+                todo!();
             }
             parser::Expression::Assignment { 
                 identifier, 
                 value 
             } => {
+                // TODO: there HAS to be a better way to write this
+
                 // Nothing reads the output of Assignment
                 // TODO: find candinates for SROA (no direct memory access, not
                 // passed as a "reference" to a function, fewer than 16 members)
@@ -803,8 +827,7 @@ impl SSA {
                 print!("GEP(");
                 prev_insts.push(inst);
                 self.print_instruction(*base, prev_insts.clone());
-                print!(", ");
-                self.print_instruction(*index, prev_insts);
+                print!(", {index}");
                 print!(")");
             },
             Value::Address(val) => {
