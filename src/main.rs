@@ -34,6 +34,8 @@ fn main() {
     let mut analyzer = analysis::Analyzer::new(&expression_arena);
     let (globals, types) = analyzer.analyze(&ast);
 
+    dbg!(&types);
+
     let mut ssa = ir::SSA::new(globals, expression_arena, types);
     ssa.ir_gen(ast);
     ssa.print_ids();

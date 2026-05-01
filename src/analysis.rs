@@ -121,7 +121,6 @@ pub struct Analyzer <'a>{
     // sizes: HashMap<parser::Type, usize>,
 }
 
-// Types
 impl<'a> Analyzer<'a> {
     pub fn new(expression_arena: &'a Vec<parser::Expression>) -> Self {
         // let mut sizes: HashMap<parser::Type, usize> = HashMap::new();
@@ -390,7 +389,7 @@ impl<'a> Analyzer<'a> {
             parser::Expression::Char(_) => parser::Type::Char,
             parser::Expression::Bool(_) => parser::Type::Bool,
             parser::Expression::Identifier(val) => {
-                return self.get_symbol(&val, "unrecognized identifier").get_type();
+                self.get_symbol(&val, "unrecognized identifier").get_type()
             }
             parser::Expression::Unary { operator, member } => {
                 match operator {
@@ -398,11 +397,11 @@ impl<'a> Analyzer<'a> {
                     lexer::Token::Bang => parser::Type::Bool,
                     lexer::Token::Ampersand => {
                         let inner_type = self.get_type(member);
-                        return parser::Type::Pointer(Box::new(inner_type));
+                        parser::Type::Pointer(Box::new(inner_type))
                     }
                     lexer::Token::DotStar => {
                         let parser::Type::Pointer(nested) = self.get_type(member) else { unreachable!() };
-                        return *nested;
+                        *nested
                     }
                     _ => panic!("unexpected operator in unary expression. found: {:?}", operator),
                 }
@@ -411,7 +410,7 @@ impl<'a> Analyzer<'a> {
                 let lhs_type = self.get_type(lhs); 
                 let rhs_type = self.get_type(rhs); 
 
-                let boolean_expr = match operator {
+                match operator {
                     lexer::Token::DoublePipe
                     | lexer::Token::DoubleAmpersand
                     | lexer::Token::EqualEqual
@@ -419,32 +418,28 @@ impl<'a> Analyzer<'a> {
                     | lexer::Token::LeftCaret
                     | lexer::Token::RightCaret
                     | lexer::Token::LeftCaretEqual
-                    | lexer::Token::RightCaretEqual => true,
-                    _ => false,
-                };
+                    | lexer::Token::RightCaretEqual => parser::Type::Bool,
+                    _ => {
+                        if lhs_type != rhs_type {
+                            panic!("expected type {} found type {}", lhs_type, rhs_type);
+                        }
 
-                if boolean_expr {
-                    return parser::Type::Bool;
+                        lhs_type
+                    },
                 }
-                
-                if lhs_type != rhs_type {
-                    panic!("expected type {} found type {}", lhs_type, rhs_type);
-                }
-                
-                return lhs_type;
             }
             parser::Expression::Dot { .. } => {
-                return self.get_symbol_dot(expr).get_type();
+                self.get_symbol_dot(expr).get_type()
             }
             parser::Expression::Assignment { identifier, value } => {
                 let lhs_type = self.get_type(identifier);
                 let rhs_type = self.get_type(value);
 
-                if lhs_type == rhs_type {
-                    return lhs_type;
+                if lhs_type != rhs_type {
+                    panic!("can not assign type {} to type {}", rhs_type, lhs_type);
                 }
 
-                panic!("can not assign type {} to type {}", rhs_type, lhs_type);
+                lhs_type
             }
             parser::Expression::FunctionCall { 
                 identifier, 
@@ -476,7 +471,7 @@ impl<'a> Analyzer<'a> {
                     }
                 }
 
-                return return_type;
+                return_type
             }
             parser::Expression::ArrayAccess { 
                 identifier, 
@@ -489,7 +484,7 @@ impl<'a> Analyzer<'a> {
                     panic!("type {} can not be indexed", self.get_type(identifier));
                 };
 
-                return *t;
+                *t
             }
             parser::Expression::ArrayConstructor { values } => {
                 let expected_type = self.get_type(values[0]);
@@ -500,10 +495,10 @@ impl<'a> Analyzer<'a> {
                     }
                 }
 
-                return parser::Type::Array { 
+                parser::Type::Array { 
                     t: Box::new(expected_type), 
                     size: Some(len) 
-                };
+                }
             }
             parser::Expression::StructConstructor { 
                 identifier, 
@@ -547,7 +542,7 @@ impl<'a> Analyzer<'a> {
                     }
                 } 
 
-                return symbol.get_type();
+                symbol.get_type()
             }
         };
 
