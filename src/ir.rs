@@ -626,7 +626,7 @@ impl SSA {
 
                     for (i, name) in names.iter().enumerate() { // find offset
                         if *name != rhs { continue }
-                        index = i;
+                        index = self.add_value(Value::Int(i as i64));
                         break;
                     }
 
@@ -667,7 +667,8 @@ impl SSA {
                     Value::Array { elements }
                     | Value::Struct { members: elements, .. } => {
                         elements.clone().into_iter().enumerate().for_each(|(i, x)| {
-                            let gep = self.add_value(Value::GetElmPtr { base: lhs, index: i });
+                            let index = self.add_value(Value::Int(i as i64));
+                            let gep = self.add_value(Value::GetElmPtr { base: lhs, index });
                             let store = self.add_value(Value::Store { address: gep, value: x });
                             self.add_inst(self.pred.unwrap(), store);
                         });
@@ -793,7 +794,8 @@ impl SSA {
                 print!("GEP(");
                 prev_insts.push(inst);
                 self.print_instruction(*base, prev_insts.clone());
-                print!(", {index}");
+                print!(", ");
+                self.print_instruction(*index, prev_insts);
                 print!(")");
             },
             Value::Address(val) => {
