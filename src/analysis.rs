@@ -117,6 +117,7 @@ fn allowed_implicit_coercion(lhs: &parser::Type, rhs: &parser::Type) {
 pub struct Analyzer <'a>{
     tables: Vec<HashMap<String, Symbol>>,
     expression_arena: &'a Vec<parser::Expression>,
+    types: Vec<parser::Type>,
     // sizes: HashMap<parser::Type, usize>,
 }
 
@@ -142,6 +143,7 @@ impl<'a> Analyzer<'a> {
         Self {
             tables: Vec::new(),
             expression_arena,
+            types: Vec::new(),
             // sizes
         } 
     }
@@ -380,7 +382,7 @@ impl<'a> Analyzer<'a> {
     }
 
     fn get_type(&mut self, expr: parser::ExpressionId) -> parser::Type {
-        match self.expression_arena[expr].clone() {
+        let t = match self.expression_arena[expr].clone() {
             parser::Expression::Null => parser::Type::Void,
             parser::Expression::Int(_) => parser::Type::I32,
             parser::Expression::Float(_) => parser::Type::F64,
@@ -547,7 +549,10 @@ impl<'a> Analyzer<'a> {
 
                 return symbol.get_type();
             }
-        }
+        };
+
+        self.types.insert(expr, t.clone());
+        return t;
     }
 }
 
