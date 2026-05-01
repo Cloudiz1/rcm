@@ -29,13 +29,13 @@ fn main() {
         return;
     };
 
-    parser::print_expressions(&expression_arena);
+    // parser::print_expressions(&expression_arena);
     // parser::print_ast(&ast, &expression_arena);
 
     let mut analyzer = analysis::Analyzer::new(&expression_arena);
     let (globals, types) = analyzer.analyze(&ast);
 
-    dbg!(&types);
+    // dbg!(&types);
 
     let mut ssa = ir::SSA::new(globals, expression_arena, types);
     ssa.ir_gen(ast);

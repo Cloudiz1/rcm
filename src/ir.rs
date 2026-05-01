@@ -446,6 +446,9 @@ impl SSA {
                         value: e,
                     });
 
+                    debug_assert!(matches!(self.expression_arena[index], parser::Expression::Identifier(..)));
+                    debug_assert!(matches!(self.expression_arena[index + 1], parser::Expression::Assignment{..}));
+
                     self.expr(index + 1);
                     return;
                 }
@@ -515,7 +518,6 @@ impl SSA {
             Statement::Return { value } => {
                 if let Some(val) = value {
                     let ret = self.expr(val);
-                    dbg!(&ret);
                     self.returns.push(ret);
                 }
 
@@ -640,80 +642,44 @@ impl SSA {
                 identifier, 
                 value 
             } => {
-                // TODO: there HAS to be a better way to write this
+                // could be simple, could need many stores
+                let rhs = self.expr(value); 
 
-                // Nothing reads the output of Assignment
-                // TODO: find candinates for SROA (no direct memory access, not
-                // passed as a "reference" to a function, fewer than 16 members)
-
-                // TODO: get rid of that clone pretty please
-                if let parser::Expression::Identifier(name) = self.expression_arena[identifier].clone() {
-                    let val = self.expr(value);
-                    self.write_variable(name.clone(), self.pred.unwrap(), val);
-                }
-                
-                // p.* = foo;
-                if matches!(self.expression_arena[identifier], parser::Expression::Unary { operator: lexer::Token::DotStar, .. }) {
-                    let lhs = self.expr(identifier);
-                    let Value::Load(address) = self.values[lhs] else { unreachable!() };
-
-                    let val = self.expr(value);
-                    let inst = self.add_value(Value::Store { address, value: val });
-                    self.add_inst(self.pred.unwrap(), inst);
-                    return 0;
+                // if lhs is simple
+                if let parser::Expression::Identifier(n) = &self.expression_arena[identifier] { 
+                    self.write_variable(n.clone(), self.pred.unwrap(), rhs);
                 }
 
-                // arr[i] = foo;
-                if let parser::Expression::ArrayAccess { identifier, index } = self.expression_arena[identifier] {
-                    let access = Value::GetElmPtr { base: self.expr(identifier), index: self.expr(index) };
-                    let gep = self.add_value(access);
-                    let rhs = self.expr(value);
+                // will return what we just wrote if simple, Value::Load( .. ) if not 
+                let mut lhs = self.expr(identifier);
+                debug_assert!(matches!(self.expression_arena[identifier], parser::Expression::Identifier( .. ))
+                        || matches!(self.values[lhs], Value::Load(..)));
 
-                    let store = self.add_value(Value::Store {
-                        address: gep,
-                        value: rhs,
-                    });
+                // if lhs is not simple, make it GEP 
+                let mut on_memory = false;
+                if let Value::Load(address) = self.values[lhs] {
+                    lhs = address;
+                    on_memory = true;
+                }
 
-                    self.add_inst(self.pred.unwrap(), store);
-                    return 0;
+                match &self.values[rhs] {
+                    // if rhs needs expanded
+                    Value::Array { elements }
+                    | Value::Struct { members: elements, .. } => {
+                        elements.clone().into_iter().enumerate().for_each(|(i, x)| {
+                            let gep = self.add_value(Value::GetElmPtr { base: lhs, index: i });
+                            let store = self.add_value(Value::Store { address: gep, value: x });
+                            self.add_inst(self.pred.unwrap(), store);
+                        });
+                    }
+                    // if rhs is simple, but lhs is not
+                    _ => {
+                        if on_memory {
+                            let store = self.add_value(Value::Store { address: lhs, value: rhs });
+                            self.add_inst(self.pred.unwrap(), store);
+                        }
+                    },
                 };
-
-                // arr = [ .. ]; -> 
-                // arr[0] = ..
-                // arr[1] = ..
-                // ...
-                if matches!(self.expression_arena[value], parser::Expression::ArrayConstructor { .. }) { // matches! to save a clone
-                    let parser::Expression::ArrayConstructor { values } = self.expression_arena[value].clone() else { unreachable!() };
-                    for (i, value) in values.into_iter().enumerate() {
-                        // its weird but it this creates a bunch of assignments for an array constructor
-                        let index = self.expression_arena.len();
-                        self.expression_arena.push(parser::Expression::Int(i as i64));
-                        self.expression_arena.push(parser::Expression::ArrayAccess { identifier, index });
-                        self.expression_arena.push(parser::Expression::Assignment { identifier: index + 1, value });
-                        self.expr(index + 2);
-                    }
-
-                    return 0; 
-                }
-
-                // let foo = {
-                //      x: 1,
-                //      y: 2,
-                // };
-                if matches!(self.expression_arena[value], parser::Expression::StructConstructor { .. }) {
-                    let base = self.expr(identifier);
-                    let constructor = self.expr(value);
-
-                    let Value::Struct{ identifier: struct_name , members } = self.values[constructor].clone() else { unreachable!() };
-                    for (i, member) in members.into_iter().enumerate() {
-                        let index = self.add_value(Value::Int (i as i64));
-                        let gep = self.add_value( Value::GetElmPtr { base, index });
-                        let store = self.add_value(Value::Store { address: gep, value: member });
-                        self.add_inst(self.pred.unwrap(), store);
-                    }
-
-                    return 0;
-                }
 
                 return 0;
             }
