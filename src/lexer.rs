@@ -423,8 +423,6 @@ impl Tokenizer {
     }
 
     fn get_token(&mut self) -> Option<Token> {
-        // ignore how shit this code is i cucked myself with Option<T> and will not be using it
-        // next time around
         while let Some(_) = self.current() {
             if self.current() == Some('/') && self.peek() == Some('/') {
                 while self.current() != Some('\n') {
@@ -474,7 +472,6 @@ impl Tokenizer {
             '-' => self.operation_and_assignment(Token::Minus, Token::MinusEqual),
             '*' => self.operation_and_assignment(Token::Star, Token::StarEqual),
             '/' => {
-
                 return Some(self.operation_and_assignment(Token::Slash, Token::SlashEqual));
             }
             '%' => self.operation_and_assignment(Token::Percent, Token::PercentEqual),

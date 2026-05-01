@@ -149,15 +149,13 @@ impl Block {
 
 pub struct SSA {
     expression_arena: Vec<parser::Expression>, 
+    expr_types: HashMap<parser::ExpressionId, parser::Type>,
 
     blocks: Vec<Block>,
     values: Vec<Value>, 
     values_table: HashMap<Value, ValueId>, // for LVN
     use_chains: Vec<Vec<ValueId>>, // for removing trivial phis
     types: Vec<parser::Type>, // uses ValueId
-
-    curr_val_id: ValueId,
-    curr_block_id: ValueId,
     pred: Option<BlockId>,
 
     exit_block: BlockId,
@@ -166,18 +164,20 @@ pub struct SSA {
 }
 
 impl SSA {
-    pub fn new(globals: HashMap<String, analysis::Symbol>, expression_arena: Vec<parser::Expression>) -> Self {
+    pub fn new(
+        globals: HashMap<String, analysis::Symbol>,
+        expression_arena: Vec<parser::Expression>,
+        expr_types: HashMap<parser::ExpressionId, parser::Type>
+    ) -> Self {
         Self {
             expression_arena,
+            expr_types,
 
             blocks: Vec::new(),
             values: Vec::new(),
             values_table: HashMap::new(),
             types: Vec::new(),
             use_chains: Vec::new(),
-
-            curr_val_id: 0,
-            curr_block_id: 0,
             pred: None,
 
             exit_block: 0,
@@ -196,10 +196,9 @@ impl SSA {
         //     self.blocks[block.predecessors[0]].successors.push(self.curr_block_id);
         // }
 
-        self.pred = Some(self.curr_block_id);
+        self.pred = Some(self.blocks.len());
         self.blocks.push(block);
-        self.curr_block_id += 1;
-        return self.curr_block_id - 1;
+        return self.blocks.len() - 1;
     }
 
     fn create_edge(&mut self, pred: BlockId, succ: BlockId) {
@@ -213,11 +212,10 @@ impl SSA {
 
     fn add_value(&mut self, value: Value) -> ValueId {
         if let Some(id) = self.values_table.get(&value) { return *id }
-        self.values_table.insert(value.clone(), self.curr_val_id);
+        self.values_table.insert(value.clone(), self.values.len());
         self.values.push(value);
         self.use_chains.push(Vec::new());
-        self.curr_val_id += 1;
-        return self.curr_val_id - 1;
+        return self.values.len() - 1;
     }
 
     fn write_variable(&mut self, variable: String, block: BlockId, value: ValueId) {
@@ -516,6 +514,7 @@ impl SSA {
             Statement::Member { .. } => return,
             Statement::Return { value } => {
                 if let Some(val) = value {
+                    dbg!(&self.expression_arena[val]);
                     let ret = self.expr(val);
                     self.returns.push(ret);
                 }
@@ -631,7 +630,9 @@ impl SSA {
                 
                 // p.* = foo;
                 if matches!(self.expression_arena[identifier], parser::Expression::Unary { operator: lexer::Token::DotStar, .. }) {
-                    let address = self.expr(identifier);
+                    let lhs = self.expr(identifier);
+                    let Value::Load(address) = self.values[lhs] else { unreachable!() };
+
                     let val = self.expr(value);
                     let inst = self.add_value(Value::Store { address, value: val });
                     self.add_inst(self.pred.unwrap(), inst);

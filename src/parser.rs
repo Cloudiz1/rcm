@@ -928,6 +928,8 @@ impl Parser {
 
     fn factor(&mut self) -> ExpressionId {
         let mut expr = self.unary();
+        dbg!(&self.expression_arena[expr]);
+        dbg!(self.current());
 
         while let Some(operator) = self.match_advance(&[
             lexer::Token::Star,

@@ -117,7 +117,7 @@ fn allowed_implicit_coercion(lhs: &parser::Type, rhs: &parser::Type) {
 pub struct Analyzer <'a>{
     tables: Vec<HashMap<String, Symbol>>,
     expression_arena: &'a Vec<parser::Expression>,
-    types: Vec<parser::Type>,
+    types: HashMap<parser::ExpressionId, parser::Type>,
     // sizes: HashMap<parser::Type, usize>,
 }
 
@@ -143,7 +143,7 @@ impl<'a> Analyzer<'a> {
         Self {
             tables: Vec::new(),
             expression_arena,
-            types: Vec::new(),
+            types: HashMap::new(),
             // sizes
         } 
     }
@@ -697,13 +697,13 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    pub fn analyze(&mut self, ast: &Vec<parser::Statement>) -> HashMap<String, Symbol> {
+    pub fn analyze(&mut self, ast: &Vec<parser::Statement>) -> (HashMap<String, Symbol>, HashMap<parser::ExpressionId, parser::Type>) {
         self.get_globals(ast);
 
         for statement in ast {
             self.analyze_statement(statement, &None);
         }
 
-        return std::mem::take(&mut self.tables[0]);
+        return (std::mem::take(&mut self.tables[0]), std::mem::take(&mut self.types));
     }
 }
