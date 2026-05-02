@@ -327,28 +327,6 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    fn desugar_dot(&mut self, expr: usize, identifier: usize, lhs: usize) {
-        // Desugar if a reference to self is found as first arg
-        let Symbol::Function { params, .. } = self.get_symbol_dot(identifier) else {
-            unreachable!();
-        };
-
-        if params.len() != 0 && params[0] == parser::Type::Pointer(Box::new(self.get_type(lhs))) {
-            let self_ref = parser::Expression::Unary {
-                operator: lexer::Token::Ampersand,
-                member: lhs,
-            };
-
-            let arg = self.expression_arena.len();
-            let parser::Expression::FunctionCall { args, .. } = &mut self.expression_arena[expr] else {
-                unreachable!();
-            };
-
-            args.insert(0, arg);
-            self.expression_arena.push(self_ref);
-        }
-    }
-
     fn get_symbol_dot(&mut self, expr: parser::ExpressionId) -> Symbol {
         let lhs = {
             let parser::Expression::Dot { lhs, .. } = &self.expression_arena[expr] else {
@@ -473,7 +451,28 @@ impl<'a> Analyzer<'a> {
                         self.get_symbol(&name, msg)
                     }
                     parser::Expression::Dot { lhs, .. } => {
-                        self.desugar_dot(expr, identifier, lhs);
+                        // Desugar if a reference to self is found as first arg
+                        let Symbol::Function { params, .. } = self.get_symbol_dot(identifier) else {
+                            unreachable!();
+                        };
+
+                        if params.len() != 0 && params[0] == parser::Type::Pointer(Box::new(self.get_type(lhs))) {
+                            let self_ref = parser::Expression::Unary {
+                                operator: lexer::Token::Ampersand,
+                                member: lhs,
+                            };
+
+                            let arg = self.expression_arena.len();
+
+                            // refetch args to modify the original
+                            let parser::Expression::FunctionCall { args, .. } = &mut self.expression_arena[expr] else {
+                                unreachable!();
+                            };
+
+                            args.insert(0, arg);
+                            self.expression_arena.push(self_ref);
+                        }
+
                         self.get_symbol_dot(identifier)
                     }
                     _ => unimplemented!("function pointers do not exist"),

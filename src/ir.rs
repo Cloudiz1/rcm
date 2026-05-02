@@ -484,6 +484,13 @@ impl SSA {
             Statement::Return { value } => {
                 if let Some(val) = value {
                     let ret = self.expr(val);
+
+                    // function calls add an instruction by default, however we dont want that if we
+                    // are returning, so we remove it
+                    if matches!(self.values[ret], Value::Call { .. }) {
+                        _ = self.blocks[self.pred.unwrap()].instructions.pop();
+                    }
+
                     self.returns.push(ret);
                 }
 
@@ -561,7 +568,7 @@ impl SSA {
                         self.add_use(new_member, deref);
                         return deref;
                     }
-                    _ => {}
+                    _ => (), 
                 };
 
                 let op = match operator {
@@ -656,6 +663,7 @@ impl SSA {
                 let name = self.expr_to_string(identifier);
                 let args = args.iter().map(|x| self.expr(*x)).collect::<Vec<ValueId>>();
                 let call = self.add_value(Value::Call { name, args });
+
                 self.add_inst(self.pred.unwrap(), call);
                 return call;
             },
