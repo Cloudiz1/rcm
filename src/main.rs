@@ -25,17 +25,16 @@ fn main() {
     // lexer::print_tokens(tokens.clone());
 
     let mut parser = parser::Parser::new(tokens, lines, args[1].clone());
-    let Some((ast, expression_arena)) = parser.parse() else {
+    let Some((ast, mut expression_arena)) = parser.parse() else {
         return;
     };
 
-    // parser::print_expressions(&expression_arena);
-    // parser::print_ast(&ast, &expression_arena);
-
-    let mut analyzer = analysis::Analyzer::new(&expression_arena);
+    let mut analyzer = analysis::Analyzer::new(&mut expression_arena);
     let (globals, types) = analyzer.analyze(&ast);
 
     // dbg!(&types);
+    parser::print_ast(&ast);
+    parser::print_expressions(&expression_arena);
 
     let mut ssa = ir::SSA::new(globals, expression_arena, types);
     ssa.ir_gen(ast);

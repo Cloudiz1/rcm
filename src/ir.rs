@@ -344,40 +344,6 @@ impl SSA {
         }
     }
 
-    /// handles structs and normal variables, instead of just variables
-    // fn write_variable_complete(&mut self, identifier: String, val: ValueId) {
-    //     if matches!(self.values[val], Value::Struct { .. }) {
-    //         self.struct_assignment(identifier, val);
-    //     } else {
-    //         self.write_variable(identifier, self.pred.unwrap(), val);
-    //     }
-    // }
-
-    // TODO: rewrite SROA in a later pass
-    /// structs need multiple write calls, this function handles that
-    // fn struct_assignment(&mut self, variable: String, struct_expr: ValueId) {
-    //     // take name, say foo
-    //     // iterate through each member, say foo.x and foo.y
-    //     // call write variable on them
-    //
-    //     let updates: Vec<(String, usize)> = {
-    //         let Value::Struct { identifier, members } = &self.values[struct_expr] else { 
-    //             unreachable!("internal error: called struct_assignment without a struct") 
-    //         };
-    //
-    //         // TODO: use symbol lookup
-    //
-    //         names.iter().zip(members).map(|(name, member)| {
-    //             (name.clone(), *member)
-    //         }).collect()
-    //     };
-    //
-    //     for (name, member) in updates {
-    //         let var = std::format!("{variable}.{name}");
-    //         self.write_variable(var, self.pred.unwrap(), member.clone());
-    //     }
-    // }
-
     fn statement(&mut self, stmt: parser::Statement, block_name: &'static str) {
         use parser::Statement;
         match stmt {
@@ -431,7 +397,6 @@ impl SSA {
                 self.create_edge(self.pred.unwrap(), self.exit_block);
             }
             Statement::ExpressionStatement(expr) => { self.expr(expr); },
-            // TODO: pointers
             Statement::VariableDeclaration {
                 identifier, 
                 variable_type, 
@@ -513,7 +478,8 @@ impl SSA {
                 self.pred = Some(merge_b);
             }
             Statement::Parameter { .. } => { unreachable!(); }
-            Statement::StructDeclaration { .. } => return, // TODO: methods
+            Statement::StructDeclaration { methods, .. } => {
+            },
             Statement::Member { .. } => return,
             Statement::Return { value } => {
                 if let Some(val) = value {

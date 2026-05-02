@@ -1,0 +1,20 @@
+struct foo {
+	x: i32,
+	y: i32,
+
+	pub fn new(x: i32, y: i32) foo {
+		return foo {
+			x: x,
+			y: y,
+		};
+	}
+
+	pub fn add(self: *foo) i32 {
+		return self.x + self.y;
+	}
+}
+
+fn main() i32 {
+	let bar = foo.new(1, 2);
+	return bar.add();
+}

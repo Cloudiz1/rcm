@@ -1,0 +1,28 @@
+struct foo {
+	x: i32,
+	y: i32,
+}
+
+struct bar {
+	nested: foo,
+	x: i32,
+	y: i32,
+}
+
+fn main() i32 {
+	let a = bar {
+		nested: foo {
+			x: 0,
+			y: 0,
+		},
+		x: 0,
+		y: 0,
+	};
+
+	a.nested.x = 1;
+	a.nested.y = 2;
+	a.x = 3;
+	a.y = 4;
+
+	return a.nested.x + a.nested.y + a.x + a.y;
+}

@@ -1072,15 +1072,15 @@ impl Parser {
                         break;
                     }
 
-                    // Desugaring!
-                    // foo.bar() -> foo.bar(&foo)
-                    if let Expression::Dot { lhs, .. } = self.expression_arena[expr] {
-                        let self_ref = self.add_expr( Expression::Unary {
-                            operator: lexer::Token::Ampersand,
-                            member: lhs,
-                        });
-                        args.insert(0, self_ref);
-                    };
+                    // // Desugaring!
+                    // // foo.bar() -> foo.bar(&foo)
+                    // if let Expression::Dot { lhs, .. } = self.expression_arena[expr] {
+                    //     let self_ref = self.add_expr( Expression::Unary {
+                    //         operator: lexer::Token::Ampersand,
+                    //         member: lhs,
+                    //     });
+                    //     args.insert(0, self_ref);
+                    // };
 
                     // consume RParen
                     self.advance();
@@ -1167,9 +1167,7 @@ pub fn print_expressions(expression_arena: &Vec<Expression>) {
     println!();
 }
 
-pub fn print_ast(ast: &Vec<Statement>, expression_arena: &Vec<Expression>) {
-    print_expressions(expression_arena);
-
+pub fn print_ast(ast: &Vec<Statement>) {
     for s in ast {
         println!("{:#?}", s);
     }

@@ -116,13 +116,13 @@ fn allowed_implicit_coercion(lhs: &parser::Type, rhs: &parser::Type) {
 
 pub struct Analyzer <'a>{
     tables: Vec<HashMap<String, Symbol>>,
-    expression_arena: &'a Vec<parser::Expression>,
+    expression_arena: &'a mut Vec<parser::Expression>,
     types: HashMap<parser::ExpressionId, parser::Type>,
     // sizes: HashMap<parser::Type, usize>,
 }
 
 impl<'a> Analyzer<'a> {
-    pub fn new(expression_arena: &'a Vec<parser::Expression>) -> Self {
+    pub fn new(expression_arena: &'a mut Vec<parser::Expression>) -> Self {
         // let mut sizes: HashMap<parser::Type, usize> = HashMap::new();
         // sizes.insert(parser::Type::I8, 1);
         // sizes.insert(parser::Type::U8, 1);
@@ -327,6 +327,28 @@ impl<'a> Analyzer<'a> {
         }
     }
 
+    fn desugar_dot(&mut self, expr: usize, identifier: usize, lhs: usize) {
+        // Desugar if a reference to self is found as first arg
+        let Symbol::Function { params, .. } = self.get_symbol_dot(identifier) else {
+            unreachable!();
+        };
+
+        if params.len() != 0 && params[0] == parser::Type::Pointer(Box::new(self.get_type(lhs))) {
+            let self_ref = parser::Expression::Unary {
+                operator: lexer::Token::Ampersand,
+                member: lhs,
+            };
+
+            let arg = self.expression_arena.len();
+            let parser::Expression::FunctionCall { args, .. } = &mut self.expression_arena[expr] else {
+                unreachable!();
+            };
+
+            args.insert(0, arg);
+            self.expression_arena.push(self_ref);
+        }
+    }
+
     fn get_symbol_dot(&mut self, expr: parser::ExpressionId) -> Symbol {
         let lhs = {
             let parser::Expression::Dot { lhs, .. } = &self.expression_arena[expr] else {
@@ -445,13 +467,14 @@ impl<'a> Analyzer<'a> {
                 identifier, 
                 args 
             } => {
-                let symbol = match &self.expression_arena[identifier] {
+                let symbol = match self.expression_arena[identifier].clone() {
                     parser::Expression::Identifier(name) => {
                         let msg = &std::format!("unrecognized function {}", name);
                         self.get_symbol(&name, msg)
                     }
-                    parser::Expression::Dot { .. } => {
-                        self.get_symbol_dot(expr)
+                    parser::Expression::Dot { lhs, .. } => {
+                        self.desugar_dot(expr, identifier, lhs);
+                        self.get_symbol_dot(identifier)
                     }
                     _ => unimplemented!("function pointers do not exist"),
                 };
