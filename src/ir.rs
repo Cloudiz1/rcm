@@ -192,10 +192,6 @@ impl SSA {
     }
 
     fn add_block(&mut self, block: Block) -> BlockId {
-        // if !block.predecessors.is_empty() {
-        //     self.blocks[block.predecessors[0]].successors.push(self.curr_block_id);
-        // }
-
         self.pred = Some(self.blocks.len());
         self.blocks.push(block);
         return self.blocks.len() - 1;
@@ -374,8 +370,12 @@ impl SSA {
 
                 for (i, p) in parameters.into_iter().enumerate() {
                     let parser::Statement::Parameter { name, t } = *p else { unreachable!() };
-                    let param = Value::Parameter { index: i, t };
+                    let param = Value::Parameter { index: i, t: t.clone() };
                     let param_id = self.add_value(param);
+
+                    // let index = self.expression_arena.len();
+                    // self.expression_arena.push(parser::Expression::Identifier(name.clone()));
+                    // self.expr_types.insert(index, t);
                     self.write_variable(name, entry, param_id);
                 };
 
@@ -396,7 +396,7 @@ impl SSA {
 
                 self.create_edge(self.pred.unwrap(), self.exit_block);
             }
-            Statement::ExpressionStatement(expr) => { self.expr(expr); },
+            Statement::Parameter { .. } => { unreachable!(); }
             Statement::VariableDeclaration {
                 identifier, 
                 variable_type, 
@@ -477,8 +477,10 @@ impl SSA {
 
                 self.pred = Some(merge_b);
             }
-            Statement::Parameter { .. } => { unreachable!(); }
             Statement::StructDeclaration { methods, .. } => {
+                for method in methods {
+                    self.statement(*method, "method");
+                }
             },
             Statement::Member { .. } => return,
             Statement::Return { value } => {
@@ -497,6 +499,7 @@ impl SSA {
                 let jump = self.add_value(Value::Jump(self.exit_block));
                 self.add_inst(self.pred.unwrap(), jump);
             }
+            Statement::ExpressionStatement(expr) => { self.expr(expr); },
         }
     }
 
@@ -586,12 +589,12 @@ impl SSA {
                 self.read_variable(name, self.pred.unwrap())
             }
             parser::Expression::Dot { lhs, rhs } => {
-                // look up lhs, get its type, get its symbol, create a load instruction with a GEP, recurse
-                // two cases. lhs is a simple struct, or its another dot operator
-                // case 1: look up once, create inst, return
-                // case 2: lookup, recurse, return
+                let mut parent_type = self.expr_types.get(&lhs).unwrap();
 
-                let parent_type = self.expr_types.get(&lhs).unwrap();
+                if let parser::Type::Pointer(parent_struct) = parent_type {
+                    parent_type = parent_struct;
+                }
+
                 if let parser::Type::Struct(typedef) = parent_type {
                     let struct_type = self.symbols.get(typedef).unwrap();
                     let analysis::Symbol::Struct { names, .. } = struct_type else { unreachable!() };
@@ -609,7 +612,7 @@ impl SSA {
                     return self.add_value(Value::Load(gep));
                 } 
 
-                todo!();
+                unreachable!("internal error: Dot operator on not struct-like type");
             }
             parser::Expression::Assignment { 
                 identifier, 
@@ -639,12 +642,12 @@ impl SSA {
                     // if rhs needs expanded
                     Value::Array { elements }
                     | Value::Struct { members: elements, .. } => {
-                        elements.clone().into_iter().enumerate().for_each(|(i, x)| {
+                        for (i, element) in elements.clone().into_iter().enumerate() {
                             let index = self.add_value(Value::Int(i as i64));
                             let gep = self.add_value(Value::GetElmPtr { base: lhs, index });
-                            let store = self.add_value(Value::Store { address: gep, value: x });
+                            let store = self.add_value(Value::Store { address: gep, value: element });
                             self.add_inst(self.pred.unwrap(), store);
-                        });
+                        }
                     }
                     // if rhs is simple, but lhs is not
                     _ => {

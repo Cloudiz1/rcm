@@ -1072,16 +1072,6 @@ impl Parser {
                         break;
                     }
 
-                    // // Desugaring!
-                    // // foo.bar() -> foo.bar(&foo)
-                    // if let Expression::Dot { lhs, .. } = self.expression_arena[expr] {
-                    //     let self_ref = self.add_expr( Expression::Unary {
-                    //         operator: lexer::Token::Ampersand,
-                    //         member: lhs,
-                    //     });
-                    //     args.insert(0, self_ref);
-                    // };
-
                     // consume RParen
                     self.advance();
                     Expression::FunctionCall {

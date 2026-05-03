@@ -33,8 +33,8 @@ fn main() {
     let (globals, types) = analyzer.analyze(&ast);
 
     // dbg!(&types);
-    parser::print_ast(&ast);
-    parser::print_expressions(&expression_arena);
+    // parser::print_ast(&ast);
+    // parser::print_expressions(&expression_arena);
 
     let mut ssa = ir::SSA::new(globals, expression_arena, types);
     ssa.ir_gen(ast);

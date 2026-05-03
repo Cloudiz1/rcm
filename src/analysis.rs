@@ -1,5 +1,6 @@
 use crate::lexer;
 use crate::parser;
+use crate::parser::Expression;
 use std::collections::HashMap;
 
 fn variant_eq(a: &parser::Type, b: &parser::Type) -> bool {
@@ -336,7 +337,13 @@ impl<'a> Analyzer<'a> {
             *lhs
         };
 
-        let lhs_type = self.get_type(lhs);
+        let mut lhs_type = self.get_type(lhs);
+
+        // implicit pointer deref
+        if let parser::Type::Pointer(parent_struct) = lhs_type {
+            lhs_type = *parent_struct;
+        }
+
         let parser::Type::Struct(identifier) = lhs_type.clone() else {
             panic!("dot operator can not be applied to type {}", lhs_type);
         };
@@ -456,7 +463,8 @@ impl<'a> Analyzer<'a> {
                             unreachable!();
                         };
 
-                        if params.len() != 0 && params[0] == parser::Type::Pointer(Box::new(self.get_type(lhs))) {
+                        let self_type = parser::Type::Pointer(Box::new(self.get_type(lhs)));
+                        if params.len() != 0 && params[0] == self_type {
                             let self_ref = parser::Expression::Unary {
                                 operator: lexer::Token::Ampersand,
                                 member: lhs,
@@ -471,6 +479,7 @@ impl<'a> Analyzer<'a> {
 
                             args.insert(0, arg);
                             self.expression_arena.push(self_ref);
+                            self.types.insert(arg, self_type);
                         }
 
                         self.get_symbol_dot(identifier)
@@ -576,6 +585,16 @@ impl<'a> Analyzer<'a> {
 impl<'a> Analyzer<'a> {
     fn analyze_statement(&mut self, statement: &parser::Statement, function_return: &Option<parser::Type>) {
         match statement {
+            parser::Statement::StructDeclaration { 
+                name, 
+                members, 
+                methods, 
+                public 
+            } => {
+                for method in methods {
+                    self.analyze_statement(method, function_return);
+                }
+            }
             parser::Statement::FunctionDeclaration { 
                 name, 
                 return_type, 
