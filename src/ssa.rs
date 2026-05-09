@@ -147,7 +147,7 @@ impl Block {
     }
 }
 
-pub struct SSA {
+pub struct SSAGen {
     expression_arena: Vec<parser::Expression>, 
     expr_types: HashMap<parser::ExpressionId, parser::Type>,
 
@@ -161,9 +161,20 @@ pub struct SSA {
     exit_block: BlockId,
     returns: Vec<ValueId>,
     symbols: HashMap<String, analysis::Symbol>,
+
+    entry: BlockId,
+    exit: BlockId,
 }
 
-impl SSA {
+// SSAGen return type
+pub struct IR {
+    values: Vec<Value>,
+    blocks: Vec<Block>,
+    entry: BlockId,
+    exit: BlockId,
+}
+
+impl SSAGen {
     pub fn new(
         globals: HashMap<String, analysis::Symbol>,
         expression_arena: Vec<parser::Expression>,
@@ -183,6 +194,9 @@ impl SSA {
             exit_block: 0,
             returns: Vec::new(),
             symbols: globals,
+
+            entry: 0,
+            exit: 0,
         }
     }
 
@@ -328,7 +342,7 @@ impl SSA {
 }
 
 // the more 'TAC' like stuff
-impl SSA {
+impl SSAGen {
     // handles dot operators
     fn expr_to_string(&self, expr: parser::ExpressionId) -> String {
         match &self.expression_arena[expr] {
@@ -366,6 +380,12 @@ impl SSA {
             } => {
                 self.exit_block = self.add_block(Block::new("exit block"));
                 let entry = self.add_block(Block::new("function entry")); // adds param to entry block
+                
+                if name == "main" {
+                    self.entry = entry;
+                    self.exit = self.exit_block;
+                }
+
                 self.seal_block(entry);
 
                 for (i, p) in parameters.into_iter().enumerate() {
@@ -591,6 +611,7 @@ impl SSA {
             parser::Expression::Dot { lhs, rhs } => {
                 let mut parent_type = self.expr_types.get(&lhs).unwrap();
 
+                // implicit ptr deref
                 if let parser::Type::Pointer(parent_struct) = parent_type {
                     parent_type = parent_struct;
                 }
@@ -706,7 +727,7 @@ impl SSA {
         }
     }
 
-    pub fn ir_gen(&mut self, statements: Vec<parser::Statement>) {
+    pub fn ir_gen(&mut self, statements: Vec<parser::Statement>) -> IR {
         // let entry = self.add_block(Block::new("entry"));
         // let undef = self.add_value(Value::UNDEF);
         // self.write_variable("@MEMORY".to_owned(), entry, undef);
@@ -715,137 +736,147 @@ impl SSA {
             self.statement(s, "top level");
             self.pred = None;
         }
+
+        IR {
+            values: std::mem::take(&mut self.values),
+            blocks: std::mem::take(&mut self.blocks),
+            entry: self.entry,
+            exit: self.exit,
+        }
     }
 }
 
-impl SSA {
-    pub fn print_ids(&self) {
-        println!("///// IDS /////");
-        for (i, val) in self.values.iter().enumerate() {
-            println!("{}: {:?}: ", i, *val);
-        }
-        println!("///////////////");
-        println!("");
+pub fn print_ids(ir: &IR) {
+    println!("///// IDS /////");
+    for (i, val) in ir.values.iter().enumerate() {
+        println!("{}: {:?}: ", i, *val);
+    }
+    println!("///////////////");
+    println!("");
+}
+
+fn print_instruction(ir: &IR, inst: ValueId, mut prev_insts: Vec<ValueId>) {
+    if prev_insts.contains(&inst) {
+        print!("<{inst}>");
+        return;
     }
 
-    fn print_instruction(&self, inst: ValueId, mut prev_insts: Vec<ValueId>) {
-        if prev_insts.contains(&inst) {
-            print!("<{inst}>");
-            return;
+    prev_insts.push(inst);
+
+    match &ir.values[inst] {
+        Value::Int(v) => print!("{}", v),
+        Value::Float(v) => print!("{}", v),
+        Value::Bool(v) => print!("{}", v),
+        Value::Char(v) => print!("{}", v),
+        Value::String(v) => print!("{}", v),
+        Value::Binary { op, lhs, rhs } => {
+            print!("(");
+            print_instruction(ir, *lhs, prev_insts.clone());
+            print!(" {:?} ", op);
+            print_instruction(ir, *rhs, prev_insts);
+            print!(")");
         }
+        Value::Unary { op, member } => {
+            print!("({:?} ", op);
+            print_instruction(ir, *member, prev_insts);
+            print!(")");
+        }
+        Value::Array { elements } => {
+            print!("[");
+            for (i, e) in elements.iter().enumerate() {
+                print_instruction(ir, *e, prev_insts.clone());
+                if i != elements.len() - 1 { print!(", ") }
+            }
+            print!("]");
+        }
+        Value::ArrayAccess { array, index } => {
+            print!("Array<{array}>[");
+            print_instruction(ir, *index, prev_insts);
+            print!("]");
+        }
+        Value::GetElmPtr { base, index } => {
+            print!("GEP(");
+            prev_insts.push(inst);
+            print_instruction(ir, *base, prev_insts.clone());
+            print!(", ");
+            print_instruction(ir, *index, prev_insts);
+            print!(")");
+        },
+        Value::Address(val) => {
+            print!("addr(");
+            print_instruction(ir, *val, prev_insts);
+            print!(")");
+        },
+        Value::Load(val) => {
+            print!("Load(");
+            print_instruction(ir, *val, prev_insts);
+            print!(")");
+        },
+        Value::Store { address, value } => {
+            print!("Store(");
+            print_instruction(ir, *address, prev_insts.clone());
+            print!(", ");
+            print_instruction(ir, *value, prev_insts);
+            print!(")");
+        },
+        Value::Call { name, args } => {
+            print!("call <{}> (", name);
+            for (i, arg) in args.iter().enumerate() {
+                print_instruction(ir, *arg, prev_insts.clone());
+                if i != args.len() - 1 { print!(", "); }
+            }
 
-        prev_insts.push(inst);
-
-        match &self.values[inst] {
-            Value::Int(v) => print!("{}", v),
-            Value::Float(v) => print!("{}", v),
-            Value::Bool(v) => print!("{}", v),
-            Value::Char(v) => print!("{}", v),
-            Value::String(v) => print!("{}", v),
-            Value::Binary { op, lhs, rhs } => {
-                print!("(");
-                self.print_instruction(*lhs, prev_insts.clone());
-                print!(" {:?} ", op);
-                self.print_instruction(*rhs, prev_insts);
-                print!(")");
+            print!(")");
+        },
+        Value::Jump(block) => print!("JMP <{}>: {}", block, ir.blocks[*block].name),
+        Value::Phi { block, operands } => {
+            print!("phi(");
+            for (i, op) in operands.iter().enumerate() {
+                print_instruction(ir, *op, prev_insts.clone()); 
+                if i != operands.len() - 1 { print!(", ") };
             }
-            Value::Unary { op, member } => {
-                print!("({:?} ", op);
-                self.print_instruction(*member, prev_insts);
-                print!(")");
+            print!(")");
+        }
+        Value::UNDEF => print!("UNDEF"),
+        Value::Parameter { index, t } => {
+            print!("param({})", index);
+        }
+        Value::Ret { value } => {
+            print!("ret ");
+            print_instruction(ir, *value, prev_insts);
+        }
+        Value::Branch { cond } => {
+            print!("br <");
+            print_instruction(ir, *cond, prev_insts);
+            print!(">");
+        }
+        Value::Struct { identifier, members } => {
+            print!("struct{{");
+            for (i, member) in members.iter().enumerate() {
+                print_instruction(ir, member.clone(), prev_insts.clone());
+                if i != members.len() - 1 { print!(", ") }
             }
-            Value::Array { elements } => {
-                print!("[");
-                for (i, e) in elements.iter().enumerate() {
-                    self.print_instruction(*e, prev_insts.clone());
-                    if i != elements.len() - 1 { print!(", ") }
-                }
-                print!("]");
-            }
-            Value::ArrayAccess { array, index } => {
-                print!("Array<{array}>[");
-                self.print_instruction(*index, prev_insts);
-                print!("]");
-            }
-            Value::GetElmPtr { base, index } => {
-                print!("GEP(");
-                prev_insts.push(inst);
-                self.print_instruction(*base, prev_insts.clone());
-                print!(", ");
-                self.print_instruction(*index, prev_insts);
-                print!(")");
-            },
-            Value::Address(val) => {
-                print!("addr(");
-                self.print_instruction(*val, prev_insts);
-                print!(")");
-            },
-            Value::Load(val) => {
-                print!("Load(");
-                self.print_instruction(*val, prev_insts);
-                print!(")");
-            },
-            Value::Store { address, value } => {
-                print!("Store(");
-                self.print_instruction(*address, prev_insts.clone());
-                print!(", ");
-                self.print_instruction(*value, prev_insts);
-                print!(")");
-            },
-            Value::Call { name, args } => {
-                print!("call <{}> (", name);
-                for (i, arg) in args.iter().enumerate() {
-                    self.print_instruction(*arg, prev_insts.clone());
-                    if i != args.len() - 1 { print!(", "); }
-                }
-
-                print!(")");
-            },
-            Value::Jump(block) => print!("JMP <{}>: {}", block, self.blocks[*block].name),
-            Value::Phi { block, operands } => {
-                print!("phi(");
-                for (i, op) in operands.iter().enumerate() {
-                    self.print_instruction(*op, prev_insts.clone()); 
-                    if i != operands.len() - 1 { print!(", ") };
-                }
-                print!(")");
-            }
-            Value::UNDEF => print!("UNDEF"),
-            Value::Parameter { index, t } => {
-                print!("param({})", index);
-            }
-            Value::Ret { value } => {
-                print!("ret ");
-                self.print_instruction(*value, prev_insts);
-            }
-            Value::Branch { cond } => {
-                print!("br <");
-                self.print_instruction(*cond, prev_insts);
-                print!(">");
-            }
-            Value::Struct { identifier, members } => {
-                print!("struct{{");
-                for (i, member) in members.iter().enumerate() {
-                    self.print_instruction(member.clone(), prev_insts.clone());
-                    if i != members.len() - 1 { print!(", ") }
-                }
-                print!("}}");
-            }
+            print!("}}");
         }
     }
+}
 
-    pub fn print_blocks(&self) {
-        for (i, block) in self.blocks.iter().enumerate(){
-            println!("{}: {}", i, block.name);
-            println!("    instructions:");
-            for inst in &block.instructions {
-                print!("        ");
-                self.print_instruction(*inst, Vec::new());
-                println!("");
-            }
-            println!("    successors: {:?}", block.successors);
-            println!("    predecessors: {:?}", block.predecessors);
+pub fn print_blocks(ir: &IR) {
+    for (i, block) in ir.blocks.iter().enumerate(){
+        println!("{}: {}", i, block.name);
+        println!("    instructions:");
+        for inst in &block.instructions {
+            print!("        ");
+            print_instruction(ir, *inst, Vec::new());
             println!("");
         }
+        println!("    successors: {:?}", block.successors);
+        println!("    predecessors: {:?}", block.predecessors);
+        println!("");
     }
+}
+
+pub fn print_misc(ir: &IR) {
+    println!("entry point: {}", ir.entry);
+    println!("exit point:  {}", ir.exit);
 }

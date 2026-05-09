@@ -5,7 +5,7 @@ pub mod util;
 pub mod lexer;
 pub mod parser;
 pub mod analysis;
-pub mod ir;
+pub mod ssa;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -36,8 +36,12 @@ fn main() {
     // parser::print_ast(&ast);
     // parser::print_expressions(&expression_arena);
 
-    let mut ssa = ir::SSA::new(globals, expression_arena, types);
-    ssa.ir_gen(ast);
-    ssa.print_ids();
-    ssa.print_blocks();
+    let mut ssa = ssa::SSAGen::new(globals, expression_arena, types);
+    let ir = ssa.ir_gen(ast);
+
+    ssa::print_ids(&ir);
+    ssa::print_blocks(&ir);
+    ssa::print_misc(&ir);
+
+
 }
