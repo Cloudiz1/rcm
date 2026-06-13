@@ -1,6 +1,5 @@
 use crate::lexer;
 use crate::parser;
-use crate::parser::Expression;
 use std::collections::HashMap;
 
 fn variant_eq(a: &parser::Type, b: &parser::Type) -> bool {

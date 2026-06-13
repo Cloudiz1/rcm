@@ -1,3 +1,5 @@
+// implements Simple and Efficient SSA Construction by Braun et al.
+
 use crate::lexer;
 use crate::parser;
 use crate::analysis;
@@ -168,10 +170,10 @@ pub struct SSAGen {
 
 // SSAGen return type
 pub struct IR {
-    values: Vec<Value>,
-    blocks: Vec<Block>,
-    entry: BlockId,
-    exit: BlockId,
+    pub values: Vec<Value>,
+    pub blocks: Vec<Block>,
+    pub entry: BlockId,
+    pub exit: BlockId,
 }
 
 impl SSAGen {
@@ -701,7 +703,6 @@ impl SSAGen {
                 identifier, index 
             } => {
                 // TODO: yeah this doesn't work at all with ptr arithmatic but thats not important right now
-                // TODO: and no more expr to sring!
                 let access = Value::GetElmPtr { base: self.expr(identifier), index: self.expr(index) };
                 let inst = self.add_value(access);
                 let load = self.add_value(Value::Load(inst));

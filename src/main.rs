@@ -6,6 +6,7 @@ pub mod lexer;
 pub mod parser;
 pub mod analysis;
 pub mod ssa;
+pub mod ralloc;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -43,5 +44,7 @@ fn main() {
     ssa::print_blocks(&ir);
     ssa::print_misc(&ir);
 
-
+    // TODO: do more than just a traversal lol
+    let mut ralloc = ralloc::Postorder::new(&ir);
+    dbg!(ralloc.postorder());
 }
