@@ -45,6 +45,8 @@ fn main() {
     ssa::print_misc(&ir);
 
     // TODO: do more than just a traversal lol
-    let mut ralloc = ralloc::Postorder::new(&ir);
-    dbg!(ralloc.postorder());
+    // let mut ralloc = ralloc::Postorder::new(&ir);
+    // dbg!(ralloc.postorder());
+
+    dbg!(ralloc::create_dom_tree(&ir));
 }
