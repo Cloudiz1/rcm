@@ -43,6 +43,7 @@ pub enum BinaryOp {
     Xor,
     LShift,
     RShift,
+    // TODO: short circuiting doesnt exist yet
     LNot, // LAnd and LOr are handled in the CFG for short circuiting
     GT,
     GTE,
@@ -58,13 +59,46 @@ pub enum UnaryOp {
     Neg,
 }
 
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub struct Value {
+    pub kind: ValueKind,
+    pub t: parser::Type,
+}
+
+impl Value {
+    pub fn new(kind: ValueKind, t: parser::Type) -> Self {
+        Self { kind, t }
+    }
+}
+
 #[derive(Clone, Hash, Eq, PartialEq, Debug)]
-pub enum Value {
+pub enum ValueKind {
     Int(i64),
     Float(HashableFloat),
     Bool(bool),
     Char(char),
     String(String),
+    Add { 
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+    Sub { 
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+    Mul { 
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+    Div { 
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+    Mod { 
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+    // TODO: get rid of this
     Binary {
         op: BinaryOp,
         lhs: ValueId,
@@ -106,7 +140,6 @@ pub enum Value {
     },
     Parameter {
         index: usize,
-        t: parser::Type,
     },
     Jump(BlockId),
     Branch {
@@ -214,7 +247,8 @@ impl SSAGen {
         self.blocks[block].instructions.push(val);
     }
 
-    fn add_value(&mut self, value: Value) -> ValueId {
+    fn add_value(&mut self, valueKind: ValueKind, expr_type: parser::Type) -> ValueId {
+        let value = Value::new(valueKind, expr_type);
         if let Some(id) = self.values_table.get(&value) { return *id }
         self.values_table.insert(value.clone(), self.values.len());
         self.values.push(value);
@@ -238,14 +272,14 @@ impl SSAGen {
     fn read_variable_recursive(&mut self, variable: String, block: BlockId) -> ValueId {
         let mut v: ValueId;
         if !self.blocks[block].sealed {
-            let phi = Value::Phi { block, operands: Vec::new() };
-            v = self.add_value(phi);
+            let phi = ValueKind::Phi { block, operands: Vec::new() };
+            v = self.add_value(phi, parser::Type::Unknown);
             self.blocks[block].incomplete_phis.insert(variable.clone(), v);
         } else if self.blocks[block].predecessors.len() == 1 {
             v = self.read_variable(variable.clone(), self.blocks[block].predecessors[0]);
         } else {
-            let phi = Value::Phi { block, operands: Vec::new() };
-            v = self.add_value(phi);
+            let phi = ValueKind::Phi { block, operands: Vec::new() };
+            v = self.add_value(phi, parser::Type::Unknown);
             self.write_variable(variable.clone(), block, v);
             v = self.add_phi_operands(variable.clone(), v);
         }
@@ -255,8 +289,8 @@ impl SSAGen {
     }
 
     fn add_phi_operands(&mut self, variable: String, phi_id: ValueId) -> ValueId {
-        let block_id = match &self.values[phi_id] {
-            Value::Phi { block, .. } => *block,
+        let block_id = match &self.values[phi_id].kind {
+            ValueKind::Phi { block, .. } => *block,
             _ => panic!("internal error: can not call ir::SSA::add_phi_operands() without a phi variant"),
         };
 
@@ -269,8 +303,12 @@ impl SSAGen {
             new_operands.push(operand);
         }
 
+        if new_operands.len() > 0 {
+            self.values[phi_id].t = self.values[new_operands[0]].t.clone()
+        }
+
         debug_assert!(new_operands.len() <= self.blocks[block_id].predecessors.len());
-        if let Value::Phi { operands, .. } = &mut self.values[phi_id] {
+        if let ValueKind::Phi { operands, .. } = &mut self.values[phi_id].kind {
             *operands = new_operands;
         }
 
@@ -279,7 +317,9 @@ impl SSAGen {
 
     fn remove_trivial_phi(&mut self, phi_id: ValueId) -> ValueId {
         let same = {
-            let Value::Phi { operands, ..} = &self.values[phi_id] else { panic!("internal error: can not call remove_trivial_phi without phi node") };
+            let ValueKind::Phi { operands, ..} = &self.values[phi_id].kind 
+                else { panic!("internal error: can not call remove_trivial_phi without phi node") };
+
             let mut same: Option<ValueId> = None;
             for &op in operands {
                 if Some(op) == same || op == phi_id { continue }; // unique or self
@@ -287,7 +327,7 @@ impl SSAGen {
                 same = Some(op);
             }
 
-            same.unwrap_or(self.add_value(Value::UNDEF))
+            same.unwrap_or(self.add_value(ValueKind::UNDEF, parser::Type::Unknown))
         };
 
         let users = std::mem::take(&mut self.use_chains[phi_id]);
@@ -295,7 +335,7 @@ impl SSAGen {
             if user == phi_id { continue }
             self.reroute(user, phi_id, same);
 
-            if let Value::Phi { .. } = self.values[user] {
+            if let ValueKind::Phi { .. } = self.values[user].kind {
                 self.remove_trivial_phi(user);
             }
         }
@@ -304,15 +344,15 @@ impl SSAGen {
     }
 
     fn reroute(&mut self, user: ValueId, old: ValueId, new: ValueId) {
-        match &mut self.values[user] {
-            Value::Binary { lhs, rhs, ..} => {
+        match &mut self.values[user].kind {
+            ValueKind::Binary { lhs, rhs, ..} => {
                 if *lhs == old { *lhs = new }
                 if *rhs == old { *rhs = new }
             },
-            Value::Unary { member, .. } => {
+            ValueKind::Unary { member, .. } => {
                 if *member == old { *member = new }
             }
-            Value::Phi { operands, .. } => {
+            ValueKind::Phi { operands, .. } => {
                 for op in operands.iter_mut() {
                     if *op == old { *op = new; }
                 }
@@ -384,8 +424,8 @@ impl SSAGen {
 
                 for (i, p) in parameters.into_iter().enumerate() {
                     let parser::Statement::Parameter { name, t } = *p else { unreachable!() };
-                    let param = Value::Parameter { index: i, t: t.clone() };
-                    let param_id = self.add_value(param);
+                    let param = ValueKind::Parameter { index: i, };
+                    let param_id = self.add_value(param, t.clone());
 
                     // let index = self.expression_arena.len();
                     // self.expression_arena.push(parser::Expression::Identifier(name.clone()));
@@ -399,12 +439,12 @@ impl SSAGen {
                 // turns branched returns into a single one
                 let returns = std::mem::take(&mut self.returns);
                 if returns.len() == 1 {
-                    let ret = self.add_value(Value::Ret { value: returns[0] });
+                    let ret = self.add_value(ValueKind::Ret { value: returns[0] }, return_type);
                     self.add_inst(self.exit_block, ret);
                 } else {
                     let operands = returns.into_iter().collect();
-                    let phi = self.add_value(Value::Phi { block: self.pred.unwrap(), operands });
-                    let ret = self.add_value(Value::Ret { value: phi });
+                    let phi = self.add_value(ValueKind::Phi { block: self.pred.unwrap(), operands }, return_type.clone());
+                    let ret = self.add_value(ValueKind::Ret { value: phi }, return_type);
                     self.add_inst(self.exit_block, ret);
                 }
 
@@ -432,7 +472,7 @@ impl SSAGen {
                     return;
                 }
 
-                let val = self.add_value(Value::UNDEF); // else init with UNDEF
+                let val = self.add_value(ValueKind::UNDEF, parser::Type::Unknown); // else init with UNDEF
                 self.write_variable(identifier, self.pred.unwrap(), val);
             }
             Statement::WhileStatement { 
@@ -464,7 +504,7 @@ impl SSAGen {
                 self.seal_block(entry);
 
                 let cond = self.expr(condition);
-                let br = self.add_value(Value::Branch { cond });
+                let br = self.add_value(ValueKind::Branch { cond }, parser::Type::Unknown);
                 self.add_inst(self.pred.unwrap(), br);
                 self.blocks[entry].filled = true;
 
@@ -503,14 +543,14 @@ impl SSAGen {
 
                     // function calls add an instruction by default, however we dont want that if we
                     // are returning, so we remove it
-                    if matches!(self.values[ret], Value::Call { .. }) {
+                    if matches!(self.values[ret].kind, ValueKind::Call { .. }) {
                         _ = self.blocks[self.pred.unwrap()].instructions.pop();
                     }
 
                     self.returns.push(ret);
                 }
 
-                let jump = self.add_value(Value::Jump(self.exit_block));
+                let jump = self.add_value(ValueKind::Jump(self.exit_block), parser::Type::Unknown);
                 self.add_inst(self.pred.unwrap(), jump);
             }
             Statement::ExpressionStatement(expr) => { self.expr(expr); },
@@ -518,11 +558,12 @@ impl SSAGen {
     }
 
     fn expr(&mut self, expr: parser::ExpressionId) -> ValueId {
+        let etype = self.expr_types[&expr].clone();
         match self.expression_arena[expr].clone() {
-            parser::Expression::Int(i) => self.add_value(Value::Int(i)),
-            parser::Expression::Float(f) => self.add_value(Value::Float(HashableFloat(f))),
-            parser::Expression::Bool(b) => self.add_value(Value::Bool(b)),
-            parser::Expression::Char(c) => self.add_value(Value::Char(c)),
+            parser::Expression::Int(i) => self.add_value(ValueKind::Int(i), etype),
+            parser::Expression::Float(f) => self.add_value(ValueKind::Float(HashableFloat(f)), etype),
+            parser::Expression::Bool(b) => self.add_value(ValueKind::Bool(b), etype),
+            parser::Expression::Char(c) => self.add_value(ValueKind::Char(c), etype),
             parser::Expression::Binary { 
                 mut lhs, 
                 operator, 
@@ -539,6 +580,44 @@ impl SSAGen {
                 //     // std::mem::swap(&mut lhs, &mut rhs);
                 // }
 
+                let new_lhs = self.expr(lhs);
+                let new_rhs = self.expr(rhs);
+
+                match operator {
+                    lexer::Token::Plus => { 
+                        return self.add_value(ValueKind::Add { 
+                            lhs: new_lhs,
+                            rhs: new_rhs, 
+                        }, etype)  
+                    },
+                    lexer::Token::Minus => { 
+                        return self.add_value(ValueKind::Sub { 
+                            lhs: new_lhs, 
+                            rhs: new_rhs, 
+                        }, etype)  
+                    },
+                    lexer::Token::Star => { 
+                        return self.add_value(ValueKind::Mul { 
+                            lhs: new_lhs, 
+                            rhs: new_rhs, 
+                        }, etype)  
+                    },
+                    lexer::Token::Slash => { 
+                        return self.add_value(ValueKind::Div { 
+                            lhs: new_lhs, 
+                            rhs: new_rhs, 
+                        }, etype)  
+                    },
+                    lexer::Token::Percent => { 
+                        return self.add_value(ValueKind::Mod { 
+                            lhs: new_lhs, 
+                            rhs: new_rhs, 
+                        }, etype)  
+                    },
+                    _ => {}
+                };
+
+                // TODO: get rid of ts
                 let op = match operator {
                     lexer::Token::Plus => BinaryOp::Add,
                     lexer::Token::Minus => BinaryOp::Sub,
@@ -559,10 +638,8 @@ impl SSAGen {
                     _ => panic!("internal error: invalid operator"),
                 };
                 
-                let new_lhs = self.expr(lhs);
-                let new_rhs = self.expr(rhs);
-                let val = Value::Binary { op, lhs: new_lhs, rhs: new_rhs };
-                let id = self.add_value(val);
+                let val = ValueKind::Binary { op, lhs: new_lhs, rhs: new_rhs };
+                let id = self.add_value(val, etype);
 
                 self.add_use(new_lhs, id);
                 self.add_use(new_rhs, id);
@@ -576,12 +653,12 @@ impl SSAGen {
 
                 match operator {
                     lexer::Token::Ampersand => {
-                        let reference = self.add_value(Value::Address(new_member));
+                        let reference = self.add_value(ValueKind::Address(new_member), etype);
                         self.add_use(new_member, reference);
                         return reference;
                     }
                     lexer::Token::DotStar => {
-                        let deref = self.add_value(Value::Load(new_member));
+                        let deref = self.add_value(ValueKind::Load(new_member), etype);
                         self.add_use(new_member, deref);
                         return deref;
                     }
@@ -594,8 +671,8 @@ impl SSAGen {
                     _ => panic!("internal error: invalid unary operator")
                 };
 
-                let val = Value::Unary { op, member: new_member };
-                let id = self.add_value(val);
+                let val = ValueKind::Unary { op, member: new_member };
+                let id = self.add_value(val, etype);
                 self.add_use(new_member, id);
                 return id;
             }
@@ -617,14 +694,14 @@ impl SSAGen {
 
                     for (i, name) in names.iter().enumerate() { // find offset
                         if *name != rhs { continue }
-                        index = self.add_value(Value::Int(i as i64));
+                        index = self.add_value(ValueKind::Int(i as i64), parser::Type::Usize);
                         break;
                     }
 
                     std::debug_assert_ne!(index, usize::MAX);
                     let parent = self.expr(lhs);
-                    let gep = self.add_value(Value::GetElmPtr { base: parent, index });
-                    return self.add_value(Value::Load(gep));
+                    let gep = self.add_value(ValueKind::GetElmPtr { base: parent, index }, parser::Type::Usize);
+                    return self.add_value(ValueKind::Load(gep), etype);
                 } 
 
                 unreachable!("internal error: Dot operator on not struct-like type");
@@ -641,33 +718,33 @@ impl SSAGen {
                     self.write_variable(n.clone(), self.pred.unwrap(), rhs);
                 }
 
-                // will return what we just wrote if simple, Value::Load( .. ) if not 
+                // will return what we just wrote if simple, ValueKind::Load( .. ) if not 
                 let mut lhs = self.expr(identifier);
                 debug_assert!(matches!(self.expression_arena[identifier], parser::Expression::Identifier( .. ))
-                        || matches!(self.values[lhs], Value::Load(..)));
+                        || matches!(self.values[lhs].kind, ValueKind::Load(..)));
 
                 // if lhs is not simple, make it GEP 
                 let mut on_memory = false;
-                if let Value::Load(address) = self.values[lhs] {
+                if let ValueKind::Load(address) = self.values[lhs].kind {
                     lhs = address;
                     on_memory = true;
                 }
 
-                match &self.values[rhs] {
+                match &self.values[rhs].kind {
                     // if rhs needs expanded
-                    Value::Array { elements }
-                    | Value::Struct { members: elements, .. } => {
+                    ValueKind::Array { elements }
+                    | ValueKind::Struct { members: elements, .. } => {
                         for (i, element) in elements.clone().into_iter().enumerate() {
-                            let index = self.add_value(Value::Int(i as i64));
-                            let gep = self.add_value(Value::GetElmPtr { base: lhs, index });
-                            let store = self.add_value(Value::Store { address: gep, value: element });
+                            let index = self.add_value(ValueKind::Int(i as i64), parser::Type::Usize);
+                            let gep = self.add_value(ValueKind::GetElmPtr { base: lhs, index }, parser::Type::Usize);
+                            let store = self.add_value(ValueKind::Store { address: gep, value: element }, parser::Type::Unknown);
                             self.add_inst(self.pred.unwrap(), store);
                         }
                     }
                     // if rhs is simple, but lhs is not
                     _ => {
                         if on_memory {
-                            let store = self.add_value(Value::Store { address: lhs, value: rhs });
+                            let store = self.add_value(ValueKind::Store { address: lhs, value: rhs }, parser::Type::Unknown);
                             self.add_inst(self.pred.unwrap(), store);
                         }
                     },
@@ -680,7 +757,7 @@ impl SSAGen {
             } => {
                 let name = self.expr_to_string(identifier);
                 let args = args.iter().map(|x| self.expr(*x)).collect::<Vec<ValueId>>();
-                let call = self.add_value(Value::Call { name, args });
+                let call = self.add_value(ValueKind::Call { name, args }, etype);
 
                 self.add_inst(self.pred.unwrap(), call);
                 return call;
@@ -689,15 +766,15 @@ impl SSAGen {
                 values
             } => {
                 let elements = values.iter().map(|x| self.expr(*x)).collect::<Vec<ValueId>>();
-                return self.add_value(Value::Array { elements });
+                return self.add_value(ValueKind::Array { elements }, etype);
             },
             parser::Expression::ArrayAccess {
                 identifier, index 
             } => {
                 // TODO: yeah this doesn't work at all with ptr arithmatic but thats not important right now
-                let access = Value::GetElmPtr { base: self.expr(identifier), index: self.expr(index) };
-                let inst = self.add_value(access);
-                let load = self.add_value(Value::Load(inst));
+                let access = ValueKind::GetElmPtr { base: self.expr(identifier), index: self.expr(index) };
+                let inst = self.add_value(access, parser::Type::Usize);
+                let load = self.add_value(ValueKind::Load(inst), parser::Type::Usize);
                 return load;
             },
             parser::Expression::StructConstructor {
@@ -714,7 +791,7 @@ impl SSAGen {
                     self.expr(val.clone())
                 }).collect(); // done in order of names to preserve order of members
 
-                return self.add_value(Value::Struct { identifier, members: new_members })
+                return self.add_value(ValueKind::Struct { identifier, members: new_members }, etype)
             },
             _ => todo!(),
         }
@@ -722,7 +799,7 @@ impl SSAGen {
 
     pub fn ir_gen(&mut self, statements: Vec<parser::Statement>) -> IR {
         // let entry = self.add_block(Block::new("entry"));
-        // let undef = self.add_value(Value::UNDEF);
+        // let undef = self.add_value(ValueKind::UNDEF);
         // self.write_variable("@MEMORY".to_owned(), entry, undef);
 
         for s in statements {
@@ -740,6 +817,7 @@ impl SSAGen {
 }
 
 // SSAGen return type
+#[derive(Debug)]
 pub struct IR {
     pub values: Vec<Value>,
     pub blocks: Vec<Block>,
@@ -780,6 +858,32 @@ pub fn print_ids(ir: &IR) {
     println!("");
 }
 
+fn print_binary(inst: ValueKind, ir: &IR, prev_insts: Vec<ValueId>) {
+    let tok = match inst {
+        ValueKind::Add { .. } => "+",
+        ValueKind::Sub { .. } => "-",
+        ValueKind::Mul { .. } => "*",
+        ValueKind::Div { .. } => "/",
+        ValueKind::Mod { .. } => "%",
+        _ => panic!("not a binary operation")
+    };
+    
+    match inst {
+        ValueKind::Add { lhs, rhs } | 
+        ValueKind::Sub { lhs, rhs } | 
+        ValueKind::Mul { lhs, rhs } | 
+        ValueKind::Div { lhs, rhs } | 
+        ValueKind::Mod { lhs, rhs } => {
+            print!("(");
+            print_instruction(ir, lhs, prev_insts.clone());
+            print!(" {} ", tok);
+            print_instruction(ir, rhs, prev_insts);
+            print!(")");
+        } 
+        _ => panic!("not a binary operation")
+    }
+}
+
 fn print_instruction(ir: &IR, inst: ValueId, mut prev_insts: Vec<ValueId>) {
     if prev_insts.contains(&inst) {
         print!("<{inst}>");
@@ -788,25 +892,30 @@ fn print_instruction(ir: &IR, inst: ValueId, mut prev_insts: Vec<ValueId>) {
 
     prev_insts.push(inst);
 
-    match &ir.values[inst] {
-        Value::Int(v) => print!("{}", v),
-        Value::Float(v) => print!("{}", v),
-        Value::Bool(v) => print!("{}", v),
-        Value::Char(v) => print!("{}", v),
-        Value::String(v) => print!("{}", v),
-        Value::Binary { op, lhs, rhs } => {
+    match &ir.values[inst].kind {
+        ValueKind::Int(v) => print!("{}", v),
+        ValueKind::Float(v) => print!("{}", v),
+        ValueKind::Bool(v) => print!("{}", v),
+        ValueKind::Char(v) => print!("{}", v),
+        ValueKind::String(v) => print!("{}", v),
+        n @ ValueKind::Add { .. } => { print_binary(n.clone(), ir, prev_insts) }
+        n @ ValueKind::Sub { .. } => { print_binary(n.clone(), ir, prev_insts) }
+        n @ ValueKind::Mul { .. } => { print_binary(n.clone(), ir, prev_insts) }
+        n @ ValueKind::Div { .. } => { print_binary(n.clone(), ir, prev_insts) }
+        n @ ValueKind::Mod { .. } => { print_binary(n.clone(), ir, prev_insts) }
+        ValueKind::Binary { op, lhs, rhs } => {
             print!("(");
             print_instruction(ir, *lhs, prev_insts.clone());
             print!(" {:?} ", op);
             print_instruction(ir, *rhs, prev_insts);
             print!(")");
         }
-        Value::Unary { op, member } => {
+        ValueKind::Unary { op, member } => {
             print!("({:?} ", op);
             print_instruction(ir, *member, prev_insts);
             print!(")");
         }
-        Value::Array { elements } => {
+        ValueKind::Array { elements } => {
             print!("[");
             for (i, e) in elements.iter().enumerate() {
                 print_instruction(ir, *e, prev_insts.clone());
@@ -814,12 +923,12 @@ fn print_instruction(ir: &IR, inst: ValueId, mut prev_insts: Vec<ValueId>) {
             }
             print!("]");
         }
-        Value::ArrayAccess { array, index } => {
+        ValueKind::ArrayAccess { array, index } => {
             print!("Array<{array}>[");
             print_instruction(ir, *index, prev_insts);
             print!("]");
         }
-        Value::GetElmPtr { base, index } => {
+        ValueKind::GetElmPtr { base, index } => {
             print!("GEP(");
             prev_insts.push(inst);
             print_instruction(ir, *base, prev_insts.clone());
@@ -827,24 +936,24 @@ fn print_instruction(ir: &IR, inst: ValueId, mut prev_insts: Vec<ValueId>) {
             print_instruction(ir, *index, prev_insts);
             print!(")");
         },
-        Value::Address(val) => {
+        ValueKind::Address(val) => {
             print!("addr(");
             print_instruction(ir, *val, prev_insts);
             print!(")");
         },
-        Value::Load(val) => {
+        ValueKind::Load(val) => {
             print!("Load(");
             print_instruction(ir, *val, prev_insts);
             print!(")");
         },
-        Value::Store { address, value } => {
+        ValueKind::Store { address, value } => {
             print!("Store(");
             print_instruction(ir, *address, prev_insts.clone());
             print!(", ");
             print_instruction(ir, *value, prev_insts);
             print!(")");
         },
-        Value::Call { name, args } => {
+        ValueKind::Call { name, args } => {
             print!("call <{}> (", name);
             for (i, arg) in args.iter().enumerate() {
                 print_instruction(ir, *arg, prev_insts.clone());
@@ -853,8 +962,8 @@ fn print_instruction(ir: &IR, inst: ValueId, mut prev_insts: Vec<ValueId>) {
 
             print!(")");
         },
-        Value::Jump(block) => print!("JMP <{}>: {}", block, ir.blocks[*block].name),
-        Value::Phi { block, operands } => {
+        ValueKind::Jump(block) => print!("JMP <{}>: {}", block, ir.blocks[*block].name),
+        ValueKind::Phi { block, operands } => {
             print!("phi(");
             for (i, op) in operands.iter().enumerate() {
                 print_instruction(ir, *op, prev_insts.clone()); 
@@ -862,20 +971,20 @@ fn print_instruction(ir: &IR, inst: ValueId, mut prev_insts: Vec<ValueId>) {
             }
             print!(")");
         }
-        Value::UNDEF => print!("UNDEF"),
-        Value::Parameter { index, t } => {
+        ValueKind::UNDEF => print!("UNDEF"),
+        ValueKind::Parameter { index } => {
             print!("param({})", index);
         }
-        Value::Ret { value } => {
+        ValueKind::Ret { value } => {
             print!("ret ");
             print_instruction(ir, *value, prev_insts);
         }
-        Value::Branch { cond } => {
+        ValueKind::Branch { cond } => {
             print!("br <");
             print_instruction(ir, *cond, prev_insts);
             print!(">");
         }
-        Value::Struct { identifier, members } => {
+        ValueKind::Struct { identifier, members } => {
             print!("struct{{");
             for (i, member) in members.iter().enumerate() {
                 print_instruction(ir, member.clone(), prev_insts.clone());

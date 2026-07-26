@@ -30,6 +30,8 @@ pub enum Type {
     Void,
     Str,
     Char,
+    Usize, // TODO: make this more than just an internal type :thumbsup:
+    Unknown,
 }
 
 impl std::fmt::Display for Type {
@@ -57,6 +59,8 @@ impl std::fmt::Display for Type {
             Type::Void => write!(f, "void"),
             Type::Str => write!(f, "string"),
             Type::Char => write!(f, "char"),
+            Type::Usize => write!(f, "usize"),
+            Type::Unknown => write!(f, "unknown"),
         }
     }
 }

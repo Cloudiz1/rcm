@@ -1,5 +1,4 @@
 use crate::ssa::{BlockId, IR};
-use crate::util::TraversalExt;
 
 // this uses the CHK dom tree algorithm
 fn intersect(b1: BlockId, b2: BlockId, doms: &Vec<Option<BlockId>>, pos: &Vec<usize>) -> BlockId {

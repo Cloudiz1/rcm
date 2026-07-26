@@ -1,6 +1,5 @@
-fn main() void {
+fn main() i32 {
 	let a = 3;
-	if a < 3 {
-		return 3;		
-	}
+	let b = 3 + a;
+	return b + 3;
 }

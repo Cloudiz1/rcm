@@ -7,13 +7,8 @@ pub mod parser;
 pub mod analysis;
 pub mod ssa;
 pub mod ralloc;
+pub mod codegen;
 use derust;
-
-use crate::util::TraversalExt;
-#[derust::benchmark]
-fn bench1(ir: &ssa::IR) -> Vec<usize> {
-    return ir.entry.postorder(|x| &ir.blocks[*x].successors).collect::<Vec<_>>();
-}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -53,7 +48,5 @@ fn main() {
     ssa::print_blocks(&ir);
     ssa::print_misc(&ir);
 
-    let dom_tree = ralloc::find_idoms(&ir);
-    bench1(&ir);
-    derust::print_bench();
+    // let dom_tree = ralloc::find_idoms(&ir);
 }
