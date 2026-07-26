@@ -3,7 +3,7 @@
 use crate::lexer;
 use crate::parser;
 use crate::analysis;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub type BlockId = usize;
 pub type ValueId = usize;
@@ -166,14 +166,6 @@ pub struct SSAGen {
 
     entry: BlockId,
     exit: BlockId,
-}
-
-// SSAGen return type
-pub struct IR {
-    pub values: Vec<Value>,
-    pub blocks: Vec<Block>,
-    pub entry: BlockId,
-    pub exit: BlockId,
 }
 
 impl SSAGen {
@@ -745,6 +737,14 @@ impl SSAGen {
             exit: self.exit,
         }
     }
+}
+
+// SSAGen return type
+pub struct IR {
+    pub values: Vec<Value>,
+    pub blocks: Vec<Block>,
+    pub entry: BlockId,
+    pub exit: BlockId,
 }
 
 pub fn print_ids(ir: &IR) {

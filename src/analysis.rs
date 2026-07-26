@@ -2,6 +2,7 @@ use crate::lexer;
 use crate::parser;
 use std::collections::HashMap;
 
+// TODO: swap this for matches!
 fn variant_eq(a: &parser::Type, b: &parser::Type) -> bool {
     std::mem::discriminant(a) == std::mem::discriminant(b)
 }

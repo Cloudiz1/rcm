@@ -1,0 +1,3 @@
+[submodule "derust"]
+	path = derust
+	url = https://github.com/Cloudiz1/derust
