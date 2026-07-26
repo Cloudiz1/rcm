@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use crate::ssa::{BlockId, IR};
 use crate::util::TraversalExt;
 
@@ -19,7 +18,7 @@ fn intersect(b1: BlockId, b2: BlockId, doms: &Vec<Option<BlockId>>, pos: &Vec<us
 }
 
 pub fn find_idoms(ir: &IR) -> Vec<BlockId> {
-    let mut nodes = ir.entry.postorder(|x| &ir.blocks[*x].successors).collect::<Vec<_>>();
+    let mut nodes = ir.cfg_postorder();
     let pos: Vec<usize> = (0..ir.blocks.len()).map(|i| {
         nodes.iter().position(|x| *x == i).expect(&std::format!("could not find pos for {}", i))
     }).collect();
@@ -68,11 +67,8 @@ struct DomTree {
 //             children[p].push(u);
 //         }
 //     }
-//
-//     fn dfs(entry: BlockId) {
-//     }
 // }
-
+//
 // fn backedges(ir: &IR) -> Vec<(BlockId, BlockId)> {
 //     for u in ir.blocks {
 //         for h in u.successors {

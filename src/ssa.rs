@@ -747,6 +747,30 @@ pub struct IR {
     pub exit: BlockId,
 }
 
+impl IR {
+    pub fn cfg_postorder(&self) -> Vec<BlockId> {
+        let mut stack: Vec<(BlockId, bool)> = vec![(self.entry, false)];
+        let mut visited: HashSet<BlockId> = HashSet::new();
+        let mut out: Vec<BlockId> = Vec::new();
+
+        while let Some((node, expanded)) = stack.pop() {
+            if expanded { out.push(node) }
+            if visited.contains(&node) { continue }
+
+            visited.insert(node);
+            stack.push((node, true));
+
+            for child in self.blocks[node].successors.iter().rev() {
+                if !visited.contains(child) {
+                    stack.push((*child, false));
+                }
+            }
+        }
+
+        return out;
+    }
+}
+
 pub fn print_ids(ir: &IR) {
     println!("///// IDS /////");
     for (i, val) in ir.values.iter().enumerate() {
