@@ -48,5 +48,7 @@ fn main() {
     ssa::print_blocks(&ir);
     ssa::print_misc(&ir);
 
+    let asm = codegen::Codegen::new(&ir).create_asm(ir.entry);
+
     // let dom_tree = ralloc::find_idoms(&ir);
 }

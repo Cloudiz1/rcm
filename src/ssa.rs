@@ -247,8 +247,8 @@ impl SSAGen {
         self.blocks[block].instructions.push(val);
     }
 
-    fn add_value(&mut self, valueKind: ValueKind, expr_type: parser::Type) -> ValueId {
-        let value = Value::new(valueKind, expr_type);
+    fn add_value(&mut self, value_kind: ValueKind, expr_type: parser::Type) -> ValueId {
+        let value = Value::new(value_kind, expr_type);
         if let Some(id) = self.values_table.get(&value) { return *id }
         self.values_table.insert(value.clone(), self.values.len());
         self.values.push(value);
@@ -458,21 +458,12 @@ impl SSAGen {
                 ..
             } => {
                 if let Some(e) = initial_value { // if it exists just reuse assignment code
-                    let index = self.expression_arena.len();
-                    self.expression_arena.push(parser::Expression::Identifier(identifier));
-                    self.expression_arena.push(parser::Expression::Assignment { 
-                        identifier: index,
-                        value: e,
-                    });
-
-                    debug_assert!(matches!(self.expression_arena[index], parser::Expression::Identifier(..)));
-                    debug_assert!(matches!(self.expression_arena[index + 1], parser::Expression::Assignment{..}));
-
-                    self.expr(index + 1);
-                    return;
+                    let rhs = self.expr(e);
+                    self.write_variable(identifier.clone(), self.pred.unwrap(), rhs);
+                    return
                 }
 
-                let val = self.add_value(ValueKind::UNDEF, parser::Type::Unknown); // else init with UNDEF
+                let val = self.add_value(ValueKind::UNDEF, variable_type.unwrap_or(parser::Type::Unknown));
                 self.write_variable(identifier, self.pred.unwrap(), val);
             }
             Statement::WhileStatement { 
@@ -774,7 +765,7 @@ impl SSAGen {
                 // TODO: yeah this doesn't work at all with ptr arithmatic but thats not important right now
                 let access = ValueKind::GetElmPtr { base: self.expr(identifier), index: self.expr(index) };
                 let inst = self.add_value(access, parser::Type::Usize);
-                let load = self.add_value(ValueKind::Load(inst), parser::Type::Usize);
+                let load = self.add_value(ValueKind::Load(inst), etype);
                 return load;
             },
             parser::Expression::StructConstructor {
