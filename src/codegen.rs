@@ -3,7 +3,7 @@ use crate::ssa::{IR, BlockId, Value, ValueKind, ValueId};
 use std::collections::HashMap;
 
 // will eventually contain registers and such
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum Location {
     StackOffset(usize),
 }
@@ -82,8 +82,8 @@ impl<'a> Codegen<'a> {
             | ValueKind::Mul { lhs, rhs }
             | ValueKind::Div { lhs, rhs }
             | ValueKind::Mod { lhs, rhs } => {
-                self.assign_locations(lhs);
-                self.assign_locations(rhs);
+                stack.extend(self.assign_locations(lhs));
+                stack.extend(self.assign_locations(rhs));
                 let offset = Location::StackOffset(self.get_size(value));
                 stack.push((*value, offset));
             }
@@ -91,12 +91,11 @@ impl<'a> Codegen<'a> {
             ValueKind::Struct { identifier, members } => {
                 todo!();
             }
-            ValueKind::Ret { .. }
-            | ValueKind::Store { .. } => (),
-            _ => {
-                let offset = Location::StackOffset(self.get_size(value));
-                stack.push((*value, offset));
-            }
+            ValueKind::Ret { value } => {
+                stack.extend(self.assign_locations(value));
+            },
+            ValueKind::Store { .. } => (),
+            _ => (), // primatives are inlined
         }
 
         return stack;
@@ -119,9 +118,14 @@ impl<'a> Codegen<'a> {
         return (allocations, total);
     }
 
-    pub fn create_asm(&mut self, block: BlockId) {
-        let (allocations, total_offset) = self.preallocate(block);
+    pub fn create_asm(&mut self, entry: BlockId) {
+        let (allocations, total_offset) = self.preallocate(entry);
         println!("sub rbp, {}", total_offset);
+
+        // dfs children
+        for block in &self.ir.blocks[entry].successors {
+            self.create_asm(*block);
+        }
 
         // for inst in &ir.blocks[block].instructions {
         //     match ir.values[*inst].kind {
