@@ -6,10 +6,10 @@ use std::cmp::max;
 
 #[derive(Copy, Clone, Debug)]
 pub enum GPR {
-    AX,
-    BX,
-    CX,
-    DX,
+    A,
+    B,
+    C,
+    D,
     SI,
     DI,
     R8,
@@ -102,8 +102,8 @@ impl BasicBlock {
 pub struct Codegen<'a> {
     ir: &'a IR,
     locations: HashMap<ssa::ValueId, Location>,
-    blocks: Vec<BasicBlock>
-    // offset: usize,
+    blocks: Vec<BasicBlock>,
+    offset: usize,
 }
 
 impl<'a> Codegen<'a> {
@@ -112,7 +112,7 @@ impl<'a> Codegen<'a> {
             ir,
             locations: HashMap::new(),
             blocks: Vec::new(),
-            // offset: 0,
+            offset: 0,
         }
     }
 
@@ -153,46 +153,31 @@ impl<'a> Codegen<'a> {
         }
     } 
 
-    fn assign_locations(&mut self, value: ssa::ValueId) -> Vec<(ssa::ValueId, Location)> {
-        let mut stack: Vec<(ssa::ValueId, Location)> = Vec::new();
-
+    fn instruction_size(&self, value: ssa::ValueId) -> usize {
         match &self.ir.values[value].kind {
             &ssa::ValueKind::Add { lhs, rhs }
             | &ssa::ValueKind::Sub { lhs, rhs }
             | &ssa::ValueKind::Mul { lhs, rhs }
             | &ssa::ValueKind::Div { lhs, rhs }
             | &ssa::ValueKind::Mod { lhs, rhs } => {
-                // TODO: id assume this is cut post ralloc
-                stack.extend(self.assign_locations(lhs));
-                stack.extend(self.assign_locations(rhs));
-                let offset = Location::StackOffset(self.get_size(value));
-                stack.push((value, offset));
+                return self.instruction_size(lhs) + self.instruction_size(rhs);
             }
             ssa::ValueKind::Array { elements } => todo!(),
             ssa::ValueKind::Struct { identifier, members } => {
                 todo!();
             }
             &ssa::ValueKind::Ret { value } => {
-                stack.extend(self.assign_locations(value));
+                return self.instruction_size(value);
             },
-            ssa::ValueKind::Store { .. } => (),
-            _ => (), // primatives are inlined
+            ssa::ValueKind::Store { .. } => 0,
+            _ => 0, // primatives are inlined
         }
-
-        return stack;
     }
 
-    // maps ValueId to Offset per BlockId
     fn block_size(&mut self, block: BlockId) -> usize {
         let mut total: usize = 0;
         for &inst in &self.ir.blocks[block].instructions {
-            for (value, location) in self.assign_locations(inst) {
-                if let Location::StackOffset(offset) = location {
-                    total += offset;
-                }
-
-                self.locations.insert(value, location);
-            }
+            total += self.instruction_size(inst);
         }
 
         return total;
@@ -245,7 +230,14 @@ impl<'a> Codegen<'a> {
         dbg!(block);
     }
 
-    fn is_primitive(&self, value: usize) -> bool {
+    fn stack_allocate(&mut self, value: ssa::ValueId, size: usize) -> Location {
+        self.offset += size;
+        let location = Location::StackOffset(self.offset);
+        self.locations.insert(value, location);
+        return location;
+    }
+
+    fn is_primitive(&self, value: ssa::ValueId) -> bool {
         match &self.ir.values[value].kind {
             ssa::ValueKind::Int(_) 
             | ssa::ValueKind::Float(_) 
@@ -256,13 +248,13 @@ impl<'a> Codegen<'a> {
         }
     }
 
-    fn gen_deps(&self, block: &mut BasicBlock, value: ssa::ValueId) {
+    fn gen_deps(&mut self, block: &mut BasicBlock, value: ssa::ValueId) {
         if !self.is_primitive(value) {
             self.create_asm(block, value);
         }
     }
 
-    fn create_asm(&self, block: &mut BasicBlock, value: ssa::ValueId) {
+    fn create_asm(&mut self, block: &mut BasicBlock, value: ssa::ValueId) {
         match &self.ir.values[value].kind {
             &ssa::ValueKind::Add { lhs, rhs } => {
                 self.gen_deps(block, lhs);
@@ -272,30 +264,21 @@ impl<'a> Codegen<'a> {
                 let out_rhs = self.get_location(rhs);
                 let size = self.get_size(value);
 
-                // if either lives in a register, just reuse it
-                if matches!(out_rhs, Location::Register(_)) {
-                    block.push_inst(Asm::Add(out_rhs, out_lhs));
-                    return
-                } 
-                else if matches!(out_lhs, Location::Register(_)) {
-                    block.push_inst(Asm::Add(out_lhs, out_rhs));
-                    return
-                }
-
-                // otherwise, default to rax
                 let reg = Location::Register(Register::GPR {
-                    kind: GPR::AX,
+                    kind: GPR::A,
                     size
                 });
 
                 block.push_inst(Asm::Mov(reg, out_lhs));
                 block.push_inst(Asm::Add(reg, out_rhs));
+                let push = self.stack_allocate(value, size);
+                block.push_inst(Asm::Mov(push, reg));
             }
             &ssa::ValueKind::Ret { value } => {
                 self.gen_deps(block, value);
 
                 let reg = Location::Register(Register::GPR { 
-                    kind: GPR::AX,
+                    kind: GPR::A,
                     size: self.get_size(value) 
                 });
 
