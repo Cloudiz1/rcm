@@ -270,21 +270,26 @@ impl<'a> Codegen<'a> {
 
                 let out_lhs = self.get_location(lhs);
                 let out_rhs = self.get_location(rhs);
+                let size = self.get_size(value);
 
-                let size_lhs = self.get_size(lhs);
-                let size_rhs = self.get_size(rhs);
-                let size = max(size_lhs, size_rhs);
-
-                if matches!(out_lhs, Location::StackOffset(_))
-                || matches!(out_rhs, Location::StackOffset(_)) {
-                    let reg = Location::Register(Register::GPR {
-                        kind: GPR::AX,
-                        size
-                    });
-
-                    block.push_inst(Asm::Mov(reg, out_lhs));
-                    block.push_inst(Asm::Add(reg, out_rhs));
+                // if either lives in a register, just reuse it
+                if matches!(out_rhs, Location::Register(_)) {
+                    block.push_inst(Asm::Add(out_rhs, out_lhs));
+                    return
+                } 
+                else if matches!(out_lhs, Location::Register(_)) {
+                    block.push_inst(Asm::Add(out_lhs, out_rhs));
+                    return
                 }
+
+                // otherwise, default to rax
+                let reg = Location::Register(Register::GPR {
+                    kind: GPR::AX,
+                    size
+                });
+
+                block.push_inst(Asm::Mov(reg, out_lhs));
+                block.push_inst(Asm::Add(reg, out_rhs));
             }
             &ssa::ValueKind::Ret { value } => {
                 self.gen_deps(block, value);
