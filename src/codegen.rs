@@ -9,7 +9,6 @@ pub enum Value {
     Word(u16),
     DWord(u32),
     QWord(u64),
-    Usize(usize),
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -178,7 +177,7 @@ impl<'a> Codegen<'a> {
         if offset > 0 {
             let inst = Asm::Sub(
                 Location::Register(Register::RSP),
-                Location::Inline(Value::Usize(offset))
+                Location::Inline(Value::QWord(offset as u64))
             );
 
             block.add(inst);
