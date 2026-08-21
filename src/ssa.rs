@@ -9,7 +9,7 @@ pub type BlockId = usize;
 pub type ValueId = usize;
 
 #[derive(Copy, Clone, Debug)]
-pub struct HashableFloat(f64);
+pub struct HashableFloat(pub f64);
 
 impl PartialEq for HashableFloat {
     fn eq(&self, other: &Self) -> bool {

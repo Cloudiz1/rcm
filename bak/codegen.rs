@@ -59,7 +59,7 @@ impl Value {
 pub enum Location {
     StackOffset(usize),
     Register(Register),
-    Inline(Primative),
+    Inline(Value),
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -153,67 +153,12 @@ impl<'a> Codegen<'a> {
         }
     } 
 
-    fn assign_locations(&mut self, value: ssa::ValueId) -> Vec<(ssa::ValueId, Location)> {
-        let mut stack: Vec<(ssa::ValueId, Location)> = Vec::new();
-
-        match &self.ir.values[value].kind {
-            &ssa::ValueKind::Add { lhs, rhs }
-            | &ssa::ValueKind::Sub { lhs, rhs }
-            | &ssa::ValueKind::Mul { lhs, rhs }
-            | &ssa::ValueKind::Div { lhs, rhs }
-            | &ssa::ValueKind::Mod { lhs, rhs } => {
-                // TODO: id assume this is cut post ralloc
-                stack.extend(self.assign_locations(lhs));
-                stack.extend(self.assign_locations(rhs));
-                let offset = Location::StackOffset(self.get_size(value));
-                stack.push((value, offset));
-            }
-            ssa::ValueKind::Array { elements } => todo!(),
-            ssa::ValueKind::Struct { identifier, members } => {
-                todo!();
-            }
-            &ssa::ValueKind::Ret { value } => {
-                stack.extend(self.assign_locations(value));
-            },
-            ssa::ValueKind::Store { .. } => (),
-            _ => (), // primatives are inlined
-        }
-
-        return stack;
-    }
-
     // maps ValueId to Offset per BlockId
     fn block_size(&mut self, block: BlockId) -> usize {
-        let mut total: usize = 0;
-        for &inst in &self.ir.blocks[block].instructions {
-            for (value, location) in self.assign_locations(inst) {
-                if let Location::StackOffset(offset) = location {
-                    total += offset;
-                }
-
-                self.locations.insert(value, location);
-            }
-        }
-
-        return total;
-    }
-
-    fn get_location(&self, value: ssa::ValueId) -> Location {
-        // if matches!(self.ir.values[value].kind, ssa::ValueKind::Call { .. }) {
-        //     // TODO: functions
-        //     let loc = Location::Register(Register::GPR {
-        //         r: GPR::AX,
-        //         size: self.get_size(value),
-        //     });
-        // }
-
-        match self.locations.get(&value) {
-            Some(&v) => v,
-            None => {
-                let prim = self.ssa_val_to_prim(value);
-                Location::Inline(prim)
-            },
-        }
+        return self.ir.blocks[block].instructions
+            .iter()
+            .map(|&x| self.get_size(x))
+            .sum();
     }
 
     pub fn create_block(&mut self, entry: BlockId) {
@@ -227,7 +172,7 @@ impl<'a> Codegen<'a> {
             let prim = Primative::Int(size as i64);
             let inst = Asm::Sub(
                 Location::Register(Register::RSP),
-                Location::Inline(prim)
+                Location::Inline(Value::new(4, prim))
             );
 
             block.push_inst(inst);
@@ -262,6 +207,28 @@ impl<'a> Codegen<'a> {
         }
     }
 
+    fn assign_location(&mut self, value: ssa::ValueId, location: Location) {
+        self.locations.insert(value, location);
+    }
+
+    fn get_location(&self, value: ssa::ValueId) -> Location {
+        // if matches!(self.ir.values[value].kind, ssa::ValueKind::Call { .. }) {
+        //     // TODO: functions
+        //     let loc = Location::Register(Register::GPR {
+        //         r: GPR::AX,
+        //         size: self.get_size(value),
+        //     });
+        // }
+
+        match self.locations.get(&value) {
+            Some(&v) => v,
+            None => {
+                let prim = self.ssa_val_to_prim(value);
+                Location::Inline(Value::new(self.get_size(value), prim))
+            },
+        }
+    }
+
     fn create_asm(&self, block: &mut BasicBlock, value: ssa::ValueId) {
         match &self.ir.values[value].kind {
             &ssa::ValueKind::Add { lhs, rhs } => {
@@ -284,7 +251,7 @@ impl<'a> Codegen<'a> {
 
                     block.push_inst(Asm::Mov(reg, out_lhs));
                     block.push_inst(Asm::Add(reg, out_rhs));
-                }
+                };
             }
             &ssa::ValueKind::Ret { value } => {
                 self.gen_deps(block, value);
@@ -308,68 +275,5 @@ impl<'a> Codegen<'a> {
             }
         }
     }
-
-    // pub fn create_asm(&mut self, entry: BlockId) {
-    //     let mut block = BasicBlock::new(entry);
-    //     let offset = self.preallocate(entry);
-    //     if offset > 0 {
-    //         let inst = Asm::Sub(
-    //             Location::Register(Register::RSP),
-    //             Location::Inline(Value::QWord(offset as u64))
-    //         );
-    //
-    //         block.add(inst);
-    //     }
-    //
-    //     for inst in &self.ir.blocks[entry].instructions {
-    //         match &self.ir.values[*inst].kind {
-    //             ssa::ValueKind::Add { lhs, rhs } => {
-    //                 let olhs = self.get_location(lhs);
-    //                 let orhs = self.get_location(rhs);
-    //
-    //                 let size_lhs = self.get_size(lhs);
-    //                 let size_rhs = self.get_size(rhs);
-    //                 let size = max(size_lhs, size_rhs);
-    //
-    //                 if matches!(olhs, Location::StackOffset(_))
-    //                 || matches!(orhs, Location::StackOffset(_)) {
-    //                     let reg = Location::Register(Register::GPR {
-    //                         r: GPR::AX,
-    //                         size
-    //                     });
-    //
-    //                     block.add(Asm::Mov(reg, *olhs));
-    //                     block.add(Asm::Add(reg, *orhs));
-    //                 }
-    //             }
-    //             ssa::ValueKind::Ret { value } => {
-    //                 dbg!(&self.ir.values[*value]);
-    //                 let reg = Location::Register(Register::GPR { 
-    //                     r: GPR::AX,
-    //                     size: self.get_size(value) 
-    //                 });
-    //
-    //                 block.add(Asm::Mov(reg, *self.get_location(value)));
-    //                 block.add(Asm::Ret);
-    //             }
-    //             ssa::ValueKind::Jump(block_id) => {
-    //                 // TODO: i feel like i should give this more thought and make sure a block id is
-    //                 // actually what i want
-    //                 Asm::Jmp(*block_id);
-    //             }
-    //             n @ _ => {
-    //                 dbg!(n);
-    //                 unimplemented!();
-    //             }
-    //         }
-    //     }
-    //
-    //     // dfs children
-    //     for block in &self.ir.blocks[entry].successors {
-    //         self.create_asm(*block);
-    //     }
-    //
-    //     dbg!(block);
-    // }
 }
 
