@@ -274,6 +274,30 @@ impl<'a> Codegen<'a> {
                 let push = self.stack_allocate(value, size);
                 block.push_inst(Asm::Mov(push, reg));
             }
+            &ssa::ValueKind::Mul { lhs, rhs } => {
+                self.gen_deps(block, lhs);
+                self.gen_deps(block, rhs);
+
+                let out_lhs = self.get_location(lhs);
+                let out_rhs = self.get_location(rhs);
+                let size = self.get_size(value);
+
+                let acc = Location::Register(Register::GPR {
+                    kind: GPR::A,
+                    size
+                });
+
+                let reg = Location::Register(Register::GPR {
+                    kind: GPR::B,
+                    size
+                });
+
+                block.push_inst(Asm::Mov(acc, out_lhs));
+                block.push_inst(Asm::Mov(reg, out_rhs));
+                block.push_inst(Asm::Mul(acc, reg));
+                let push = self.stack_allocate(value, size);
+                block.push_inst(Asm::Mov(push, acc));
+            }
             &ssa::ValueKind::Ret { value } => {
                 self.gen_deps(block, value);
 
