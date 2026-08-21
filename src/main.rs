@@ -8,7 +8,6 @@ pub mod analysis;
 pub mod ssa;
 pub mod ralloc;
 pub mod codegen;
-use derust;
 
 fn main() {
     let args: Vec<String> = env::args().collect();

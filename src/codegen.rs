@@ -1,13 +1,37 @@
 use crate::parser::{Type};
-use crate::ssa::{IR, BlockId, Value, ValueKind, ValueId};
+use crate::ssa::{IR, BlockId};
+use crate::ssa;
 use std::collections::HashMap;
 
-// will eventually contain registers and such
+#[derive(Copy, Clone, Debug)]
+pub enum Value {
+    Byte(u8),
+    Word(u16),
+    DWord(u32),
+    QWord(u64),
+    Usize(usize),
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct GPR {
+    pub num: usize,
+    pub size: usize,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum Register {
+    GPR(GPR),
+    RBP,
+}
+
 #[derive(Copy, Clone, Debug)]
 pub enum Location {
     StackOffset(usize),
+    Register(Register),
+    Inline(Value)
 }
 
+#[derive(Debug)]
 pub enum Asm {
     Mov(Location, Location),
     Add(Location, Location),
@@ -23,10 +47,31 @@ pub enum Asm {
     Je(BlockId),
 }
 
+#[derive(Debug)]
+struct BasicBlock {
+    // label: String,
+    block_id: BlockId, 
+    instructions: Vec<Asm>
+}
+
+impl BasicBlock {
+    pub fn new(id: BlockId) -> Self {
+        Self {
+            block_id: id,
+            instructions: Vec::new(),
+        }
+    }
+
+    pub fn add(&mut self, inst: Asm) {
+        self.instructions.push(inst);
+    }
+}
+
 pub struct Codegen<'a> {
     ir: &'a IR,
-    locations: HashMap<ValueId, Location>,
-    offset: usize,
+    locations: HashMap<ssa::ValueId, Location>,
+    blocks: Vec<BasicBlock>
+    // offset: usize,
 }
 
 impl<'a> Codegen<'a> {
@@ -34,8 +79,13 @@ impl<'a> Codegen<'a> {
         Self {
             ir,
             locations: HashMap::new(),
-            offset: 0,
+            blocks: Vec::new(),
+            // offset: 0,
         }
+    }
+
+    fn emit_block(&mut self, block: BasicBlock) {
+        self.blocks.push(block);
     }
 
     // fn get_location(&mut self, value: ValueId) -> Location {
@@ -48,7 +98,7 @@ impl<'a> Codegen<'a> {
     //     }
     // }
 
-    fn get_size(&self, value: &ValueId) -> usize {
+    fn get_size(&self, value: &ssa::ValueId) -> usize {
         match self.ir.values[*value].t {
             Type::Str
             | Type::Pointer(_)
@@ -73,28 +123,28 @@ impl<'a> Codegen<'a> {
         }
     } 
 
-    fn assign_locations(&mut self, value: &ValueId) -> Vec<(ValueId, Location)> {
-        let mut stack: Vec<(ValueId, Location)> = Vec::new();
+    fn assign_locations(&mut self, value: &ssa::ValueId) -> Vec<(ssa::ValueId, Location)> {
+        let mut stack: Vec<(ssa::ValueId, Location)> = Vec::new();
 
         match &self.ir.values[*value].kind {
-            ValueKind::Add { lhs, rhs }
-            | ValueKind::Sub { lhs, rhs }
-            | ValueKind::Mul { lhs, rhs }
-            | ValueKind::Div { lhs, rhs }
-            | ValueKind::Mod { lhs, rhs } => {
+            ssa::ValueKind::Add { lhs, rhs }
+            | ssa::ValueKind::Sub { lhs, rhs }
+            | ssa::ValueKind::Mul { lhs, rhs }
+            | ssa::ValueKind::Div { lhs, rhs }
+            | ssa::ValueKind::Mod { lhs, rhs } => {
                 stack.extend(self.assign_locations(lhs));
                 stack.extend(self.assign_locations(rhs));
                 let offset = Location::StackOffset(self.get_size(value));
                 stack.push((*value, offset));
             }
-            ValueKind::Array { elements } => todo!(),
-            ValueKind::Struct { identifier, members } => {
+            ssa::ValueKind::Array { elements } => todo!(),
+            ssa::ValueKind::Struct { identifier, members } => {
                 todo!();
             }
-            ValueKind::Ret { value } => {
+            ssa::ValueKind::Ret { value } => {
                 stack.extend(self.assign_locations(value));
             },
-            ValueKind::Store { .. } => (),
+            ssa::ValueKind::Store { .. } => (),
             _ => (), // primatives are inlined
         }
 
@@ -102,8 +152,7 @@ impl<'a> Codegen<'a> {
     }
 
     // maps ValueId to Offset per BlockId
-    fn preallocate(&mut self, block: BlockId) -> (HashMap<ValueId, Location>, usize) {
-        let mut allocations: HashMap<ValueId, Location> = HashMap::new();
+    fn preallocate(&mut self, block: BlockId) -> usize {
         let mut total: usize = 0;
         for inst in &self.ir.blocks[block].instructions {
             for (value, location) in self.assign_locations(inst) {
@@ -111,39 +160,56 @@ impl<'a> Codegen<'a> {
                     total += offset;
                 }
 
-                allocations.insert(value, location);
+                self.locations.insert(value, location);
             }
         }
 
-        return (allocations, total);
+        return total;
+    }
+
+    fn get_location(&mut self, value: &ssa::ValueId) -> &Location {
+        self.locations.get(value).unwrap()
     }
 
     pub fn create_asm(&mut self, entry: BlockId) {
-        let (allocations, total_offset) = self.preallocate(entry);
-        println!("sub rbp, {}", total_offset);
+        let mut block = BasicBlock::new(entry);
+        let offset = self.preallocate(entry);
+        if offset > 0 {
+            let inst = Asm::Sub(
+                Location::Register(Register::RBP),
+                Location::Inline(Value::Usize(offset))
+            );
+
+            block.add(inst);
+        }
+
+        dbg!(block);
+
+        for inst in &self.ir.blocks[entry].instructions {
+            match &self.ir.values[*inst].kind {
+                ssa::ValueKind::Add { lhs, rhs } => {
+                    let olhs = self.get_location(lhs);
+                    let orhs = self.get_location(rhs);
+                }
+                ssa::ValueKind::Ret { value } => {
+                    let val = self.get_location(value);
+                }
+                ssa::ValueKind::Jump(block_id) => {
+                    // TODO: i feel like i should give this more thought and make sure a block id is
+                    // actually what i want
+                    dbg!(Asm::Jmp(*block_id));
+                }
+                n @ _ => {
+                    dbg!(n);
+                    unimplemented!();
+                }
+            }
+        }
 
         // dfs children
         for block in &self.ir.blocks[entry].successors {
             self.create_asm(*block);
         }
-
-        // for inst in &ir.blocks[block].instructions {
-        //     match ir.values[*inst].kind {
-        //         ValueKind::Add { lhs, rhs } => {
-        //             let olhs = self.get_location(lhs);
-        //             let orhs = self.get_location(rhs);
-        //         }
-        //         ValueKind::Sub { lhs, rhs } => {
-        //             let olhs = self.get_location(lhs);
-        //             let orhs = self.get_location(rhs);
-        //         }
-        //         ValueKind::Mul { lhs, rhs } => {
-        //             let olhs = self.get_location(lhs);
-        //             let orhs = self.get_location(rhs);
-        //         }
-        //         _ => unimplemented!(),
-        //     }
-        // }
     }
 }
 
