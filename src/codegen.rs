@@ -22,6 +22,7 @@ pub struct GPR {
 pub enum Register {
     GPR(GPR),
     RBP,
+    RSP,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -176,7 +177,7 @@ impl<'a> Codegen<'a> {
         let offset = self.preallocate(entry);
         if offset > 0 {
             let inst = Asm::Sub(
-                Location::Register(Register::RBP),
+                Location::Register(Register::RSP),
                 Location::Inline(Value::Usize(offset))
             );
 
