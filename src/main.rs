@@ -47,7 +47,13 @@ fn main() {
     ssa::print_blocks(&ir);
     ssa::print_misc(&ir);
 
-    let asm = codegen::Codegen::new(&ir).create_block(ir.entry);
+    let mut codegen = codegen::Codegen::new(&ir);
+    for &function in &ir.functions {
+        codegen.create_block(function);
+    }
+
+    let asm = codegen.create_block(ir.entry);
+
 
     // let dom_tree = ralloc::find_idoms(&ir);
 }

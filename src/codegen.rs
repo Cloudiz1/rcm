@@ -1,8 +1,8 @@
-use crate::parser::{Type};
+use crate::util;
 use crate::ssa::{IR, BlockId};
-use crate::ssa;
+use crate::ssa; // as to not pollute with ssa::{ Value, ValueKind, ValueId }
+use crate::analysis::Symbol;
 use std::collections::HashMap;
-use std::cmp::max;
 
 #[derive(Copy, Clone, Debug)]
 pub enum GPR {
@@ -33,7 +33,7 @@ pub enum Register {
 }
 
 #[derive(Copy, Clone, Debug)]
-enum Primative {
+pub enum Immediate {
     Int(i64),
     Float(f64),
     // TODO: many more...
@@ -43,11 +43,11 @@ enum Primative {
 #[derive(Copy, Clone, Debug)]
 struct Value {
     size: usize,
-    prim: Primative
+    prim: Immediate
 }
 
 impl Value {
-    pub fn new(size: usize, prim: Primative) -> Self {
+    pub fn new(size: usize, prim: Immediate) -> Self {
         Self {
             size,
             prim
@@ -57,12 +57,13 @@ impl Value {
 
 #[derive(Copy, Clone, Debug)]
 pub enum Location {
+    ParamOffset(usize),
     StackOffset(usize),
     Register(Register),
-    Inline(Primative),
+    Immediate(Immediate),
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub enum Asm {
     Mov(Location, Location),
     Add(Location, Location),
@@ -76,19 +77,23 @@ pub enum Asm {
     Label(BlockId),
     Jmp(BlockId),
     Je(BlockId),
+    Call(String),
+    Push(Location),
+    Pop(Location),
     Ret
 }
 
 #[derive(Debug)]
 struct BasicBlock {
-    // label: String,
+    label: &'static str,
     block_id: BlockId, 
     instructions: Vec<Asm>
 }
 
 impl BasicBlock {
-    pub fn new(id: BlockId) -> Self {
+    pub fn new(id: BlockId, label: &'static str) -> Self {
         Self {
+            label,
             block_id: id,
             instructions: Vec::new(),
         }
@@ -120,38 +125,17 @@ impl<'a> Codegen<'a> {
         self.blocks.push(block);
     }
 
-    fn ssa_val_to_prim(&self, value: ssa::ValueId) -> Primative {
+    fn ssa_val_to_prim(&self, value: ssa::ValueId) -> Immediate {
         match self.ir.values[value].kind {
-            ssa::ValueKind::Int(val) => Primative::Int(val),
-            ssa::ValueKind::Float(val) => Primative::Float(val.0),
+            ssa::ValueKind::Int(val) => Immediate::Int(val),
+            ssa::ValueKind::Float(val) => Immediate::Float(val.0),
             _ => panic!("not primative")
         }
     }
 
     fn get_size(&self, value: ssa::ValueId) -> usize {
-        match self.ir.values[value].t {
-            Type::Str
-            | Type::Pointer(_)
-            | Type::Array{ .. }
-            | Type::Usize => std::mem::size_of::<usize>(),
-            Type::I8 => 1,
-            Type::U8 => 1,
-            Type::I16 => 2,
-            Type::U16 => 2,
-            Type::I32 => 4,
-            Type::U32 => 4,
-            Type::I64 => 8,
-            Type::U64 => 8,
-            Type::F16 => 2,
-            Type::F32 => 4,
-            Type::F64 => 8,
-            Type::Char => 1,
-            Type::Bool => 1,
-            Type::Void => 0,
-            Type::Unknown => 0,
-            _ => panic!("fuck"),
-        }
-    } 
+        util::get_size(&self.ir.values[value].t)
+    }
 
     fn instruction_size(&self, value: ssa::ValueId) -> usize {
         match &self.ir.values[value].kind {
@@ -160,7 +144,7 @@ impl<'a> Codegen<'a> {
             | &ssa::ValueKind::Mul { lhs, rhs }
             | &ssa::ValueKind::Div { lhs, rhs }
             | &ssa::ValueKind::Mod { lhs, rhs } => {
-                return self.instruction_size(lhs) + self.instruction_size(rhs);
+                return self.get_size(value) + self.instruction_size(lhs) + self.instruction_size(rhs);
             }
             ssa::ValueKind::Array { elements } => todo!(),
             ssa::ValueKind::Struct { identifier, members } => {
@@ -184,35 +168,63 @@ impl<'a> Codegen<'a> {
     }
 
     fn get_location(&self, value: ssa::ValueId) -> Location {
-        // if matches!(self.ir.values[value].kind, ssa::ValueKind::Call { .. }) {
-        //     // TODO: functions
-        //     let loc = Location::Register(Register::GPR {
-        //         r: GPR::AX,
-        //         size: self.get_size(value),
-        //     });
-        // }
+        if let Some(&v) = self.locations.get(&value) {
+            return v;
+        }
 
-        match self.locations.get(&value) {
-            Some(&v) => v,
-            None => {
+        // value can still be a plethera of things, namely:
+        //  - Immediate
+        //  - function call
+        //  - parameter
+        match &self.ir.values[value].kind {
+            ssa::ValueKind::Call { name, .. } => { 
+                // for now, all return values live in RAX
+                let Symbol::Function { return_type, .. } = self.ir.symbols.get(name)
+                    .expect("Codegen::get_location, expected function, is None") else {
+                    panic!("Codegen::get_location, expected function");
+                };
+
+                Location::Register(Register::GPR { 
+                    kind: GPR::A, 
+                    size: util::get_size(return_type)
+                })
+            }
+            ssa::ValueKind::Param { offset } => {
+                const PARAM_OFFSET: usize = 16; // rbp + rsp
+                Location::ParamOffset(PARAM_OFFSET + offset)
+            }
+            _ => {
+                // primateive, hopefully
                 let prim = self.ssa_val_to_prim(value);
-                Location::Inline(prim)
-            },
+                Location::Immediate(prim)
+            }
         }
     }
 
     pub fn create_block(&mut self, entry: BlockId) {
-        let mut block = BasicBlock::new(entry);
+        // TODO: needs a bit more than that...
+        let label = self.ir.blocks[entry].name; 
+        let mut block = BasicBlock::new(entry, label);
         let size = self.block_size(entry);
+
+        let rbp = Asm::Push(Location::Register(Register::RBP));
+        let rsp = Asm::Mov(
+            Location::Register(Register::RBP),
+            Location::Register(Register::RSP)
+        );
+
+        block.push_inst(rbp);
+        block.push_inst(rsp);
+
         if size > 0 {
             // TODO: this only needs to be set up if:
             // basic block contains a function call
             // uses >128 bytes (red zone i think)
             // has a load instruction (needs to copy it into stack)
-            let prim = Primative::Int(size as i64);
+            let prim = Immediate::Int(size as i64);
             let inst = Asm::Sub(
                 Location::Register(Register::RSP),
-                Location::Inline(prim)
+                Location::Immediate(prim)
             );
 
             block.push_inst(inst);
@@ -243,7 +255,8 @@ impl<'a> Codegen<'a> {
             | ssa::ValueKind::Float(_) 
             | ssa::ValueKind::Bool(_) 
             // | ssa::ValueKind::String(_) 
-            | ssa::ValueKind::Char(_) => true,
+            | ssa::ValueKind::Char(_)
+            | ssa::ValueKind::Param{ .. } => true,
             _ => false
         }
     }
@@ -298,6 +311,23 @@ impl<'a> Codegen<'a> {
                 let push = self.stack_allocate(value, size);
                 block.push_inst(Asm::Mov(push, acc));
             }
+            ssa::ValueKind::Call { name, args } => {
+                // push instructions
+                let mut total: usize = 0;
+                for &arg in args {
+                    self.gen_deps(block, arg);
+                    let loc = Location::Immediate(self.ssa_val_to_prim(arg));
+                    block.push_inst(Asm::Push(loc));
+                    total += self.get_size(arg);
+                }
+
+                // call, pop args 
+                block.push_inst(Asm::Call(name.to_owned()));
+                block.push_inst(Asm::Add(
+                    Location::Register(Register::RBP), 
+                    Location::Immediate(Immediate::Int(total as i64))
+                ));
+            }
             &ssa::ValueKind::Ret { value } => {
                 self.gen_deps(block, value);
 
@@ -307,6 +337,7 @@ impl<'a> Codegen<'a> {
                 });
 
                 block.push_inst(Asm::Mov(reg, self.get_location(value)));
+                block.push_inst(Asm::Pop(Location::Register(Register::RBP)));
                 block.push_inst(Asm::Ret);
             }
             ssa::ValueKind::Jump(block_id) => {
@@ -314,74 +345,13 @@ impl<'a> Codegen<'a> {
                 // actually what i want
                 Asm::Jmp(*block_id);
             }
+            // &ssa::ValueKind::Parameter { offset } => {
+            // }
             n @ _ => {
                 dbg!(n);
                 unimplemented!();
             }
         }
     }
-
-    // pub fn create_asm(&mut self, entry: BlockId) {
-    //     let mut block = BasicBlock::new(entry);
-    //     let offset = self.preallocate(entry);
-    //     if offset > 0 {
-    //         let inst = Asm::Sub(
-    //             Location::Register(Register::RSP),
-    //             Location::Inline(Value::QWord(offset as u64))
-    //         );
-    //
-    //         block.add(inst);
-    //     }
-    //
-    //     for inst in &self.ir.blocks[entry].instructions {
-    //         match &self.ir.values[*inst].kind {
-    //             ssa::ValueKind::Add { lhs, rhs } => {
-    //                 let olhs = self.get_location(lhs);
-    //                 let orhs = self.get_location(rhs);
-    //
-    //                 let size_lhs = self.get_size(lhs);
-    //                 let size_rhs = self.get_size(rhs);
-    //                 let size = max(size_lhs, size_rhs);
-    //
-    //                 if matches!(olhs, Location::StackOffset(_))
-    //                 || matches!(orhs, Location::StackOffset(_)) {
-    //                     let reg = Location::Register(Register::GPR {
-    //                         r: GPR::AX,
-    //                         size
-    //                     });
-    //
-    //                     block.add(Asm::Mov(reg, *olhs));
-    //                     block.add(Asm::Add(reg, *orhs));
-    //                 }
-    //             }
-    //             ssa::ValueKind::Ret { value } => {
-    //                 dbg!(&self.ir.values[*value]);
-    //                 let reg = Location::Register(Register::GPR { 
-    //                     r: GPR::AX,
-    //                     size: self.get_size(value) 
-    //                 });
-    //
-    //                 block.add(Asm::Mov(reg, *self.get_location(value)));
-    //                 block.add(Asm::Ret);
-    //             }
-    //             ssa::ValueKind::Jump(block_id) => {
-    //                 // TODO: i feel like i should give this more thought and make sure a block id is
-    //                 // actually what i want
-    //                 Asm::Jmp(*block_id);
-    //             }
-    //             n @ _ => {
-    //                 dbg!(n);
-    //                 unimplemented!();
-    //             }
-    //         }
-    //     }
-    //
-    //     // dfs children
-    //     for block in &self.ir.blocks[entry].successors {
-    //         self.create_asm(*block);
-    //     }
-    //
-    //     dbg!(block);
-    // }
 }
 

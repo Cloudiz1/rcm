@@ -3,6 +3,7 @@
 use crate::lexer;
 use crate::parser;
 use crate::analysis;
+use crate::util;
 use std::collections::{HashMap, HashSet};
 
 pub type BlockId = usize;
@@ -138,15 +139,15 @@ pub enum ValueKind {
         block: BlockId,
         operands: Vec<ValueId>,
     },
-    Parameter {
-        index: usize,
-    },
     Jump(BlockId),
     Branch {
         cond: ValueId,
     },
     Ret {
         value: ValueId,
+    },
+    Param {
+        offset: usize,
     },
     UNDEF,
 }
@@ -157,6 +158,7 @@ pub struct Block {
     pub current_definitions: HashMap<String, ValueId>,
     pub incomplete_phis: HashMap<String, ValueId>,
     pub instructions: Vec<ValueId>,
+    pub size: usize,
 
     pub filled: bool,
     pub sealed: bool,
@@ -172,6 +174,7 @@ impl Block {
             current_definitions: HashMap::new(),
             incomplete_phis: HashMap::new(),
             instructions: Vec::new(),
+            size: 0,
 
             filled: false,
             sealed: false,
@@ -190,11 +193,11 @@ pub struct SSAGen {
     values: Vec<Value>, 
     values_table: HashMap<Value, ValueId>, // for LVN
     use_chains: Vec<Vec<ValueId>>, // for removing trivial phis
-    types: Vec<parser::Type>, // uses ValueId
     pred: Option<BlockId>,
 
     exit_block: BlockId,
     returns: Vec<ValueId>,
+    functions: Vec<BlockId>,
     symbols: HashMap<String, analysis::Symbol>,
 
     entry: BlockId,
@@ -214,12 +217,12 @@ impl SSAGen {
             blocks: Vec::new(),
             values: Vec::new(),
             values_table: HashMap::new(),
-            types: Vec::new(),
             use_chains: Vec::new(),
             pred: None,
 
             exit_block: 0,
             returns: Vec::new(),
+            functions: Vec::new(),
             symbols: globals,
 
             entry: 0,
@@ -414,22 +417,23 @@ impl SSAGen {
             } => {
                 self.exit_block = self.add_block(Block::new("exit block"));
                 let entry = self.add_block(Block::new("function entry")); // adds param to entry block
-                
+
                 if name == "main" {
                     self.entry = entry;
                     self.exit = self.exit_block;
+                } else {
+                    self.functions.push(entry);
                 }
 
                 self.seal_block(entry);
 
-                for (i, p) in parameters.into_iter().enumerate() {
+                let mut total_offset = 0;
+                for p in parameters {
                     let parser::Statement::Parameter { name, t } = *p else { unreachable!() };
-                    let param = ValueKind::Parameter { index: i, };
-                    let param_id = self.add_value(param, t.clone());
+                    total_offset += util::get_size(&t);
 
-                    // let index = self.expression_arena.len();
-                    // self.expression_arena.push(parser::Expression::Identifier(name.clone()));
-                    // self.expr_types.insert(index, t);
+                    let param = ValueKind::Param { offset: total_offset };
+                    let param_id = self.add_value(param, t);
                     self.write_variable(name, entry, param_id);
                 };
 
@@ -801,6 +805,8 @@ impl SSAGen {
         IR {
             values: std::mem::take(&mut self.values),
             blocks: std::mem::take(&mut self.blocks),
+            functions: std::mem::take(&mut self.functions),
+            symbols: std::mem::take(&mut self.symbols),
             entry: self.entry,
             exit: self.exit,
         }
@@ -812,6 +818,8 @@ impl SSAGen {
 pub struct IR {
     pub values: Vec<Value>,
     pub blocks: Vec<Block>,
+    pub functions: Vec<BlockId>,
+    pub symbols: HashMap<String, analysis::Symbol>,
     pub entry: BlockId,
     pub exit: BlockId,
 }
@@ -963,8 +971,8 @@ fn print_instruction(ir: &IR, inst: ValueId, mut prev_insts: Vec<ValueId>) {
             print!(")");
         }
         ValueKind::UNDEF => print!("UNDEF"),
-        ValueKind::Parameter { index } => {
-            print!("param({})", index);
+        ValueKind::Param { offset } => {
+            print!("param({})", offset);
         }
         ValueKind::Ret { value } => {
             print!("ret ");
