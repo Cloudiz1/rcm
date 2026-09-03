@@ -152,6 +152,14 @@ pub enum ValueKind {
     UNDEF,
 }
 
+#[derive(Default, Debug, Clone)]
+pub enum BlockKind {
+    FunctionEntry,
+    FunctionExit,
+    #[default]
+    BasicBlock,
+}
+
 #[derive(Debug, Clone)]
 pub struct Block {
     pub name: &'static str,
@@ -165,6 +173,7 @@ pub struct Block {
 
     pub predecessors: Vec<BlockId>, 
     pub successors: Vec<BlockId>,
+    pub kind: BlockKind,
 }
 
 impl Block {
@@ -181,6 +190,7 @@ impl Block {
 
             predecessors: Vec::new(),
             successors: Vec::new(),
+            kind: BlockKind::default(),
         }
     }
 }
@@ -415,8 +425,13 @@ impl SSAGen {
                 body, 
                 public 
             } => {
-                self.exit_block = self.add_block(Block::new("exit block"));
-                let entry = self.add_block(Block::new("function entry")); // adds param to entry block
+                let mut exit_block = Block::new("exit block");
+                exit_block.kind = BlockKind::FunctionExit;
+                self.exit_block = self.add_block(exit_block);
+
+                let mut entry_block = Block::new("function entry");
+                entry_block.kind = BlockKind::FunctionEntry;
+                let entry = self.add_block(entry_block); // adds param to entry block
 
                 if name == "main" {
                     self.entry = entry;
@@ -442,15 +457,19 @@ impl SSAGen {
 
                 // turns branched returns into a single one
                 let returns = std::mem::take(&mut self.returns);
-                if returns.len() == 1 {
-                    let ret = self.add_value(ValueKind::Ret { value: returns[0] }, return_type);
-                    self.add_inst(self.exit_block, ret);
-                } else {
-                    let operands = returns.into_iter().collect();
-                    let phi = self.add_value(ValueKind::Phi { block: self.pred.unwrap(), operands }, return_type.clone());
-                    let ret = self.add_value(ValueKind::Ret { value: phi }, return_type);
-                    self.add_inst(self.exit_block, ret);
-                }
+                match returns.len() {
+                    0 => {}
+                    1 => {
+                        let ret = self.add_value(ValueKind::Ret { value: returns[0] }, return_type);
+                        self.add_inst(self.exit_block, ret);
+                    }
+                    _ => {
+                        let operands = returns.into_iter().collect();
+                        let phi = self.add_value(ValueKind::Phi { block: self.pred.unwrap(), operands }, return_type.clone());
+                        let ret = self.add_value(ValueKind::Ret { value: phi }, return_type);
+                        self.add_inst(self.exit_block, ret);
+                    }
+                };
 
                 self.create_edge(self.pred.unwrap(), self.exit_block);
             }
