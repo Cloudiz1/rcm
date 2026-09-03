@@ -207,14 +207,16 @@ impl<'a> Codegen<'a> {
         let mut block = BasicBlock::new(entry, label);
         let size = self.block_size(entry);
 
-        let rbp = Asm::Push(Location::Register(Register::RBP));
-        let rsp = Asm::Mov(
-            Location::Register(Register::RBP),
-            Location::Register(Register::RSP)
-        );
+        if matches!(self.ir.blocks[entry].kind, ssa::BlockKind::FunctionEntry) {
+            let rbp = Asm::Push(Location::Register(Register::RBP));
+            let rsp = Asm::Mov(
+                Location::Register(Register::RBP),
+                Location::Register(Register::RSP)
+            );
 
-        block.push_inst(rbp);
-        block.push_inst(rsp);
+            block.push_inst(rbp);
+            block.push_inst(rsp);
+        }
 
         if size > 0 {
             // TODO: this only needs to be set up if:
