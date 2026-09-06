@@ -429,7 +429,7 @@ impl SSAGen {
                 exit_block.kind = BlockKind::FunctionExit;
                 self.exit_block = self.add_block(exit_block);
 
-                let mut entry_block = Block::new(format!("{}: entry", name));
+                let mut entry_block = Block::new(name.clone());
                 entry_block.kind = BlockKind::FunctionEntry;
                 let entry = self.add_block(entry_block); // adds param to entry block
 

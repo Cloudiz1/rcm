@@ -35,24 +35,24 @@ pub enum Register {
 impl std::fmt::Display for Register {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Register::RSP => write!(f, "RSP"),
-            Register::RBP => write!(f, "RBP"),
+            Register::RSP => write!(f, "rsp"),
+            Register::RBP => write!(f, "rbp"),
             Register::GPR { kind, size } => {
                 let name = match kind {
-                    GPR::A => "A",
-                    GPR::B => "B",
-                    GPR::C => "C",
-                    GPR::D => "D",
+                    GPR::A => "a",
+                    GPR::B => "b",
+                    GPR::C => "c",
+                    GPR::D => "d",
                     _ => {
                         dbg!(kind);
                         unimplemented!();
                     }
                 };
                 match size {
-                    1 => write!(f, "{name}L"),
-                    2 => write!(f, "{name}X"),
-                    4 => write!(f, "E{name}X"),
-                    8 => write!(f, "R{name}X"),
+                    1 => write!(f, "{name}l"),
+                    2 => write!(f, "{name}x"),
+                    4 => write!(f, "e{name}x"),
+                    8 => write!(f, "r{name}x"),
                     _ => panic!("invalid register size"),
                 }
             }
@@ -97,7 +97,7 @@ impl std::fmt::Display for Location {
 
 #[derive(Debug, Clone)]
 pub enum Asm {
-    Mov(Location, Location),
+    Mov(Location, Location, usize),
     Add(Location, Location),
     Sub(Location, Location),
     Mul(Location, Location),
@@ -249,7 +249,8 @@ impl<'a> Codegen<'a> {
             let rbp = Asm::Push(Location::Register(Register::RBP));
             let rsp = Asm::Mov(
                 Location::Register(Register::RBP),
-                Location::Register(Register::RSP)
+                Location::Register(Register::RSP),
+                8
             );
 
             block.push_inst(rbp);
@@ -322,10 +323,10 @@ impl<'a> Codegen<'a> {
                     size
                 });
 
-                block.push_inst(Asm::Mov(reg, out_lhs));
+                block.push_inst(Asm::Mov(reg, out_lhs, self.get_size(lhs)));
                 block.push_inst(Asm::Add(reg, out_rhs));
                 let push = self.stack_allocate(value, size);
-                block.push_inst(Asm::Mov(push, reg));
+                block.push_inst(Asm::Mov(push, reg, size));
             }
             &ssa::ValueKind::Mul { lhs, rhs } => {
                 self.gen_deps(block, lhs);
@@ -345,38 +346,53 @@ impl<'a> Codegen<'a> {
                     size
                 });
 
-                block.push_inst(Asm::Mov(acc, out_lhs));
-                block.push_inst(Asm::Mov(reg, out_rhs));
+                block.push_inst(Asm::Mov(acc, out_lhs, self.get_size(lhs)));
+                block.push_inst(Asm::Mov(reg, out_rhs, self.get_size(rhs)));
                 block.push_inst(Asm::Mul(acc, reg));
                 let push = self.stack_allocate(value, size);
-                block.push_inst(Asm::Mov(push, acc));
+                block.push_inst(Asm::Mov(push, acc, size));
             }
             ssa::ValueKind::Call { name, args } => {
-                // push instructions
+                // get total space, find spots for args
                 let mut total: usize = 0;
-                for &arg in args {
+                let mut inst: Vec<Asm> = Vec::with_capacity(args.len());
+
+                for &arg in args.iter().rev() {
                     self.gen_deps(block, arg);
-                    let loc = Location::Immediate(self.ssa_val_to_prim(arg));
-                    block.push_inst(Asm::Push(loc));
-                    total += self.get_size(arg);
+                    let size = self.get_size(arg);
+                    inst.push(Asm::Mov(
+                        Location::StackOffset(self.offset + total),
+                        self.get_location(arg),
+                        size
+                    ));
+                    total += size;
                 }
 
-                // call, pop args 
+                // reserve space
+                block.push_inst(Asm::Sub(
+                    Location::Register(Register::RSP),
+                    Location::Immediate(Immediate::Int(total as i64))
+                ));
+
+                // add mov instructions
+                block.instructions.extend(inst);
+
+                // call, inc rsp
                 block.push_inst(Asm::Call(name.to_owned()));
                 block.push_inst(Asm::Add(
-                    Location::Register(Register::RBP), 
+                    Location::Register(Register::RSP), 
                     Location::Immediate(Immediate::Int(total as i64))
                 ));
             }
             &ssa::ValueKind::Ret { value } => {
                 self.gen_deps(block, value);
 
+                let size = self.get_size(value);
                 let reg = Location::Register(Register::GPR { 
-                    kind: GPR::A,
-                    size: self.get_size(value) 
+                    kind: GPR::A, size
                 });
 
-                block.push_inst(Asm::Mov(reg, self.get_location(value)));
+                block.push_inst(Asm::Mov(reg, self.get_location(value), size));
                 block.push_inst(Asm::Pop(Location::Register(Register::RBP)));
                 block.push_inst(Asm::Ret);
             }
