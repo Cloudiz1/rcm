@@ -82,7 +82,8 @@ impl AsmGenerator {
             Asm::Pop(l)  => write!(self.block, "\tpop {}\n", l).unwrap(),
             Asm::Jmp(dest) => write!(self.block, "\tjmp L{}:\n", self.id_lookup[dest]).unwrap(),
             Asm::Ret => {
-                write!(self.block, "\tmov rsp, rbp\n").unwrap();
+                // TODO: get a better system for terminating instructions, so i know how to add
+                // this for non returning functions...
                 write!(self.block, "\tret\n").unwrap()
             }
             Asm::Call(name) => write!(self.block, "\tcall {}\n", name).unwrap(),

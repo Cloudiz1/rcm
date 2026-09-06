@@ -445,9 +445,11 @@ impl SSAGen {
                 let mut total_offset = 0;
                 for p in parameters {
                     let parser::Statement::Parameter { name, t } = *p else { unreachable!() };
+
+                    // start offset at zero since thats how asm works...
+                    let param = ValueKind::Param { offset: total_offset };
                     total_offset += util::get_size(&t);
 
-                    let param = ValueKind::Param { offset: total_offset };
                     let param_id = self.add_value(param, t);
                     self.write_variable(name, entry, param_id);
                 };

@@ -393,6 +393,11 @@ impl<'a> Codegen<'a> {
                 });
 
                 block.push_inst(Asm::Mov(reg, self.get_location(value), size));
+                block.push_inst(Asm::Mov(
+                        Location::Register(Register::RSP),
+                        Location::Register(Register::RBP),
+                        8
+                ));
                 block.push_inst(Asm::Pop(Location::Register(Register::RBP)));
                 block.push_inst(Asm::Ret);
             }
