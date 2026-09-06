@@ -152,7 +152,7 @@ pub enum ValueKind {
     UNDEF,
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Copy, Clone)]
 pub enum BlockKind {
     FunctionEntry,
     FunctionExit,
@@ -162,7 +162,7 @@ pub enum BlockKind {
 
 #[derive(Debug, Clone)]
 pub struct Block {
-    pub name: &'static str,
+    pub name: String,
     pub current_definitions: HashMap<String, ValueId>,
     pub incomplete_phis: HashMap<String, ValueId>,
     pub instructions: Vec<ValueId>,
@@ -177,7 +177,7 @@ pub struct Block {
 }
 
 impl Block {
-    fn new(name: &'static str) -> Self {
+    fn new(name: String) -> Self {
         Self {
             name,
             current_definitions: HashMap::new(),
@@ -401,7 +401,7 @@ impl SSAGen {
         }
     }
 
-    fn statement(&mut self, stmt: parser::Statement, block_name: &'static str) {
+    fn statement(&mut self, stmt: parser::Statement, block_name: String) {
         use parser::Statement;
         match stmt {
             Statement::ParseError => unreachable!("internal error: how did a ParseError even make its way to IR gen"),
@@ -413,7 +413,7 @@ impl SSAGen {
                 self.seal_block(b);
 
                 for s in stmts {
-                    self.statement(*s, "Basic Block");
+                    self.statement(*s, "Basic Block".to_owned());
                 }
 
                 self.blocks[b].filled = true;
@@ -425,11 +425,11 @@ impl SSAGen {
                 body, 
                 public 
             } => {
-                let mut exit_block = Block::new("exit block");
+                let mut exit_block = Block::new(format!("{}: exit", name));
                 exit_block.kind = BlockKind::FunctionExit;
                 self.exit_block = self.add_block(exit_block);
 
-                let mut entry_block = Block::new("function entry");
+                let mut entry_block = Block::new(format!("{}: entry", name));
                 entry_block.kind = BlockKind::FunctionEntry;
                 let entry = self.add_block(entry_block); // adds param to entry block
 
@@ -453,7 +453,7 @@ impl SSAGen {
                 };
 
                 self.blocks[entry].filled = true;
-                self.statement(*body, "function body");
+                self.statement(*body, format!("{}: body", name));
 
                 // turns branched returns into a single one
                 let returns = std::mem::take(&mut self.returns);
@@ -493,19 +493,19 @@ impl SSAGen {
                 condition, 
                 block 
             } => {
-                let entry = self.add_block(Block::new("while entry"));
+                let entry = self.add_block(Block::new("while entry".to_owned()));
                 self.create_edge(self.pred.unwrap() - 1, entry);
 
                 self.expr(condition);
                 self.blocks[entry].filled = true; // NOT SEALED
 
-                self.statement(*block, "while body"); 
+                self.statement(*block, "while body".to_owned()); 
                 self.create_edge(self.pred.unwrap(), entry); // loop to while header
                 self.seal_block(entry);
 
                 // we need the next block to attach the entry
                 self.pred = Some(entry);
-                let post = self.add_block(Block::new("use"));
+                let post = self.add_block(Block::new("use".to_owned()));
                 self.create_edge(entry, post);
                 self.seal_block(post);
             }
@@ -522,16 +522,16 @@ impl SSAGen {
                 self.add_inst(self.pred.unwrap(), br);
                 self.blocks[entry].filled = true;
 
-                self.statement(*block, "then block"); // then
+                self.statement(*block, "then block".to_owned());
                 let then_b = self.pred.unwrap();
                 self.blocks[then_b].filled = true;
 
-                let merge_b = self.add_block(Block::new("if merge"));
+                let merge_b = self.add_block(Block::new("if merge".to_owned()));
                 self.create_edge(then_b, merge_b);
 
                 if let Some(alt_b) = alt {
                     self.pred = Some(entry); 
-                    self.statement(*alt_b, "else block");
+                    self.statement(*alt_b, "else block".to_owned());
                     let else_b = self.pred.unwrap();
                     self.blocks[else_b].filled = true;
                     self.seal_block(else_b);
@@ -547,7 +547,7 @@ impl SSAGen {
             }
             Statement::StructDeclaration { methods, .. } => {
                 for method in methods {
-                    self.statement(*method, "method");
+                    self.statement(*method, "method".to_owned());
                 }
             },
             Statement::Member { .. } => return,
@@ -817,7 +817,7 @@ impl SSAGen {
         // self.write_variable("@MEMORY".to_owned(), entry, undef);
 
         for s in statements {
-            self.statement(s, "top level");
+            self.statement(s, "top level".to_owned());
             self.pred = None;
         }
 

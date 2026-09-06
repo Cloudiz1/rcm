@@ -8,6 +8,7 @@ pub mod analysis;
 pub mod ssa;
 pub mod ralloc;
 pub mod codegen;
+pub mod asm;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -52,8 +53,11 @@ fn main() {
         codegen.create_block(function);
     }
 
-    let asm = codegen.create_block(ir.entry);
+    codegen.create_block(ir.entry);
+    let blocks = codegen.get_blocks();
+    dbg!(&blocks);
 
-
+    let asm = asm::AsmGenerator::new()
+        .create_asm(blocks);
     // let dom_tree = ralloc::find_idoms(&ir);
 }

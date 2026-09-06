@@ -32,6 +32,34 @@ pub enum Register {
     RBP
 }
 
+impl std::fmt::Display for Register {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Register::RSP => write!(f, "RSP"),
+            Register::RBP => write!(f, "RBP"),
+            Register::GPR { kind, size } => {
+                let name = match kind {
+                    GPR::A => "A",
+                    GPR::B => "B",
+                    GPR::C => "C",
+                    GPR::D => "D",
+                    _ => {
+                        dbg!(kind);
+                        unimplemented!();
+                    }
+                };
+                match size {
+                    1 => write!(f, "{name}L"),
+                    2 => write!(f, "{name}X"),
+                    4 => write!(f, "E{name}X"),
+                    8 => write!(f, "R{name}X"),
+                    _ => panic!("invalid register size"),
+                }
+            }
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub enum Immediate {
     Int(i64),
@@ -39,18 +67,11 @@ pub enum Immediate {
     // TODO: many more...
 } 
 
-
-#[derive(Copy, Clone, Debug)]
-struct Value {
-    size: usize,
-    prim: Immediate
-}
-
-impl Value {
-    pub fn new(size: usize, prim: Immediate) -> Self {
-        Self {
-            size,
-            prim
+impl std::fmt::Display for Immediate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Immediate::Int(val) => write!(f, "{}", val),
+            Immediate::Float(val) => write!(f, "{}", val),
         }
     }
 }
@@ -61,6 +82,17 @@ pub enum Location {
     StackOffset(usize),
     Register(Register),
     Immediate(Immediate),
+}
+
+impl std::fmt::Display for Location {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Location::ParamOffset(size) => write!(f, "[rbp+{}]", size),
+            Location::StackOffset(size) => write!(f, "[rbp-{}]", size),
+            Location::Register(reg) => reg.fmt(f),
+            Location::Immediate(imm) => imm.fmt(f),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -84,18 +116,20 @@ pub enum Asm {
 }
 
 #[derive(Debug)]
-struct BasicBlock {
-    label: &'static str,
-    block_id: BlockId, 
-    instructions: Vec<Asm>
+pub struct BasicBlock {
+    pub label: String,
+    pub id: BlockId, 
+    pub instructions: Vec<Asm>,
+    pub kind: ssa::BlockKind,
 }
 
 impl BasicBlock {
-    pub fn new(id: BlockId, label: &'static str) -> Self {
+    pub fn new(id: BlockId, label: String, kind: ssa::BlockKind) -> Self {
         Self {
             label,
-            block_id: id,
+            id,
             instructions: Vec::new(),
+            kind,
         }
     }
 
@@ -203,8 +237,12 @@ impl<'a> Codegen<'a> {
 
     pub fn create_block(&mut self, entry: BlockId) {
         // TODO: needs a bit more than that...
-        let label = self.ir.blocks[entry].name; 
-        let mut block = BasicBlock::new(entry, label);
+        let mut block = BasicBlock::new(
+            entry,
+            self.ir.blocks[entry].name.clone(),
+            self.ir.blocks[entry].kind
+        );
+
         let size = self.block_size(entry);
 
         if matches!(self.ir.blocks[entry].kind, ssa::BlockKind::FunctionEntry) {
@@ -241,7 +279,7 @@ impl<'a> Codegen<'a> {
             self.create_block(*block);
         }
 
-        dbg!(block);
+        self.emit_block(block);
     }
 
     fn stack_allocate(&mut self, value: ssa::ValueId, size: usize) -> Location {
@@ -347,13 +385,15 @@ impl<'a> Codegen<'a> {
                 // actually what i want
                 Asm::Jmp(*block_id);
             }
-            // &ssa::ValueKind::Parameter { offset } => {
-            // }
             n @ _ => {
                 dbg!(n);
                 unimplemented!();
             }
         }
+    }
+
+    pub fn get_blocks(&mut self) -> Vec<BasicBlock> {
+        std::mem::take(&mut self.blocks)
     }
 }
 
