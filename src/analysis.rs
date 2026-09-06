@@ -124,27 +124,10 @@ pub struct Analyzer <'a>{
 
 impl<'a> Analyzer<'a> {
     pub fn new(expression_arena: &'a mut Vec<parser::Expression>) -> Self {
-        // let mut sizes: HashMap<parser::Type, usize> = HashMap::new();
-        // sizes.insert(parser::Type::I8, 1);
-        // sizes.insert(parser::Type::U8, 1);
-        // sizes.insert(parser::Type::I16, 2);
-        // sizes.insert(parser::Type::U16, 2);
-        // sizes.insert(parser::Type::I32, 4);
-        // sizes.insert(parser::Type::U32, 4);
-        // sizes.insert(parser::Type::I64, 8);
-        // sizes.insert(parser::Type::U64, 8);
-        // sizes.insert(parser::Type::F16, 2);
-        // sizes.insert(parser::Type::F32, 4);
-        // sizes.insert(parser::Type::F64, 8);
-        // sizes.insert(parser::Type::Bool, 1);
-        // sizes.insert(parser::Type::Char, 4);
-        // sizes.insert(parser::Type::Pointer(), 4);
-
         Self {
             tables: Vec::new(),
             expression_arena,
             types: HashMap::new(),
-            // sizes
         } 
     }
 
@@ -416,6 +399,7 @@ impl<'a> Analyzer<'a> {
             parser::Expression::Binary { lhs, operator, rhs } => {
                 let lhs_type = self.get_type(lhs); 
                 let rhs_type = self.get_type(rhs); 
+                dbg!(&self.expression_arena[expr]);
 
                 match operator {
                     lexer::Token::DoublePipe
@@ -650,6 +634,15 @@ impl<'a> Analyzer<'a> {
                     self.analyze_statement(else_block, function_return);
                 }
             }
+            parser::Statement::WhileStatement { condition, block } => {
+                let condition_type = self.get_type(*condition);
+
+                if !variant_eq(&condition_type, &parser::Type::Bool) {
+                    panic!("condition must contain bool expression");
+                }
+
+                self.analyze_statement(block, function_return);
+            }
             parser::Statement::Block(statements) => {
                 self.add_table();
                 for statement in statements {
@@ -693,7 +686,10 @@ impl<'a> Analyzer<'a> {
             parser::Statement::ExpressionStatement(expr) => {
                 self.get_type(*expr);
             }
-            _ => (),
+            _ => {
+                dbg!(statement);
+                unimplemented!();
+            }
         }
     }
 }

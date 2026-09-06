@@ -154,10 +154,18 @@ pub enum ValueKind {
 
 #[derive(Default, Debug, Copy, Clone)]
 pub enum BlockKind {
-    FunctionEntry,
-    FunctionExit,
     #[default]
     BasicBlock,
+    FunctionEntry,
+    FunctionExit,
+}
+
+#[derive(Default, Debug, Clone)]
+pub enum Terminator {
+    #[default]
+    FallThrough,
+    Return,
+    ConditionalJump,
 }
 
 #[derive(Debug, Clone)]
@@ -167,6 +175,8 @@ pub struct Block {
     pub incomplete_phis: HashMap<String, ValueId>,
     pub instructions: Vec<ValueId>,
     pub size: usize,
+
+    pub term: Terminator,
 
     pub filled: bool,
     pub sealed: bool,
@@ -184,6 +194,8 @@ impl Block {
             incomplete_phis: HashMap::new(),
             instructions: Vec::new(),
             size: 0,
+            
+            term: Terminator::default(),
 
             filled: false,
             sealed: false,
@@ -574,7 +586,12 @@ impl SSAGen {
     }
 
     fn expr(&mut self, expr: parser::ExpressionId) -> ValueId {
-        let etype = self.expr_types[&expr].clone();
+        let etype = self.expr_types.get(&expr).unwrap_or_else(|| {
+            eprintln!("Could not find type entry for: ");
+            dbg!(&self.expression_arena[expr]);
+            panic!("fatal error in finding type");
+        }).clone();
+
         match self.expression_arena[expr].clone() {
             parser::Expression::Int(i) => self.add_value(ValueKind::Int(i), etype),
             parser::Expression::Float(f) => self.add_value(ValueKind::Float(HashableFloat(f)), etype),
