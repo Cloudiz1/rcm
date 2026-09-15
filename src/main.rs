@@ -1,14 +1,15 @@
 use std::env;
 use std::fs;
 
-pub mod util;
-pub mod lexer;
-pub mod parser;
-pub mod analysis;
-pub mod ssa;
-pub mod ralloc;
-pub mod codegen;
-pub mod asm;
+mod util;
+mod lexer;
+mod parser;
+mod analysis;
+mod ssa;
+mod ssa_new;
+mod ralloc;
+mod codegen;
+mod asm;
 
 fn main() {
     let args: Vec<String> = env::args().collect();

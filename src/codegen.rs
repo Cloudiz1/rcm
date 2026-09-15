@@ -2,7 +2,7 @@ use crate::util;
 use crate::ssa::{IR, BlockId};
 use crate::ssa; // as to not pollute with ssa::{ Value, ValueKind, ValueId }
 use crate::analysis::Symbol;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Copy, Clone, Debug)]
 pub enum GPR {
@@ -143,6 +143,7 @@ pub struct Codegen<'a> {
     locations: HashMap<ssa::ValueId, Location>,
     blocks: Vec<BasicBlock>,
     offset: usize,
+    traversed: HashSet<BlockId>,
 }
 
 impl<'a> Codegen<'a> {
@@ -152,6 +153,7 @@ impl<'a> Codegen<'a> {
             locations: HashMap::new(),
             blocks: Vec::new(),
             offset: 0,
+            traversed: HashSet::new(),
         }
     }
 
@@ -236,6 +238,11 @@ impl<'a> Codegen<'a> {
     }
 
     pub fn create_block(&mut self, entry: BlockId) {
+        match self.traversed.get(&entry) {
+            Some(_) => { return; },
+            None => self.traversed.insert(entry),
+        };
+
         // TODO: needs a bit more than that...
         let mut block = BasicBlock::new(
             entry,
