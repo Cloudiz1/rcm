@@ -3,8 +3,9 @@ use std::{
 };
 
 use crate::{
+    lexer::Token,
     analysis::Symbol,
-    parser::{Expression, Statement, Type}, util,
+    parser::{Expression, ExpressionId, Statement, Type}, util,
 };
 
 type BlockId = usize;
@@ -95,7 +96,7 @@ define_instructions!{
     binary {
         Add, Sub, Mul, Div, Mod, And, Or, Xor, LShift, RShift,
         LNot, LAnd, LOr, GT, GTE, LT, LTE, Eq, NotEq
-    }
+    } 
 }
 
 #[derive(Default)]
@@ -425,13 +426,84 @@ impl SSABuilder {
 
                 self.fill(b);
             } 
+            Statement::IfStatement { condition, block, alt } => {
+                let entry = self.add_block(BasicBlock::new(Rc::from("if condition")));
+                self.seal(entry);
+
+                // the conditions hold no instructions, just a conditional jump as a terminating value
+                self.fill(entry);
+            }
             Statement::WhileStatement { condition, block } => {
                 // TODO: this needs a lot of thought on how i want to do conditionals to optimize
                 // for fallthrough and short circuiting
             }
-            Statement::IfStatement { condition, block, alt } => {
-                // TODO: same concern as in while statement
+        }
+    }
+}
+
+// i am not even a little bit proud of this code. fixing it means rewriting parser with Box again,
+// and i just dont want to do that right now...
+// TODO: rewrite parser with Box<T> or Rc<RefCell<T>>
+impl SSABuilder {
+    /// mutates the value at the arena in place to invert a logical condition
+    /// recurses for all children
+    fn invert_condition(&mut self, expr: ExpressionId) {
+        match &self.exprs[expr].clone() {
+            Expression::Bool(b) => self.exprs[expr] = Expression::Bool(!b),
+            Expression::Unary{ operator, member } => {
+                if !matches!(operator, Token::Bang) { panic!() };
+                self.exprs[expr] = self.exprs[*member].clone();
             }
+            Expression::Binary { lhs, operator, rhs } => {
+                match operator {
+                    Token::EqualEqual => self.exprs[expr] = Expression::Binary{ lhs: *lhs, operator: Token::BangEqual, rhs: *rhs},
+                    Token::BangEqual => self.exprs[expr] = Expression::Binary{ lhs: *lhs, operator: Token::EqualEqual, rhs: *rhs},
+                    Token::DoubleAmpersand => {
+                        self.invert_condition(*lhs);
+                        self.invert_condition(*rhs);
+                        self.exprs[expr] = Expression::Binary{
+                            lhs: *lhs, operator: Token::DoublePipe, rhs: *rhs
+                        }
+                    }
+                    Token::DoublePipe => {
+                        self.invert_condition(*lhs);
+                        self.invert_condition(*rhs);
+                        self.exprs[expr] = Expression::Binary{
+                            lhs: *lhs, operator: Token::DoubleAmpersand, rhs: *rhs
+                        }
+                    }
+                    Token::LeftCaret => {
+                        self.invert_condition(*lhs);
+                        self.invert_condition(*rhs);
+                        self.exprs[expr] = Expression::Binary{
+                            lhs: *lhs, operator: Token::RightCaretEqual, rhs: *rhs
+                        }
+                    }
+                    Token::RightCaret => {
+                        self.invert_condition(*lhs);
+                        self.invert_condition(*rhs);
+                        self.exprs[expr] = Expression::Binary{
+                            lhs: *lhs, operator: Token::LeftCaretEqual, rhs: *rhs
+                        }
+                    }
+                    Token::LeftCaretEqual => {
+                        self.invert_condition(*lhs);
+                        self.invert_condition(*rhs);
+                        self.exprs[expr] = Expression::Binary{
+                            lhs: *lhs, operator: Token::RightCaret, rhs: *rhs
+                        }
+                    }
+                    Token::RightCaretEqual => {
+                        self.invert_condition(*lhs);
+                        self.invert_condition(*rhs);
+                        self.exprs[expr] = Expression::Binary{
+                            lhs: *lhs, operator: Token::LeftCaret, rhs: *rhs
+                        }
+                    }
+                    _ => panic!(),
+                }
+            }
+            _ => panic!(),
         }
     }
 }
