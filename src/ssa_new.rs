@@ -1,7 +1,10 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap, intrinsics::unreachable, rc::Rc
+};
+
 use crate::{
     analysis::Symbol,
-    parser::{Expression, Type}, ssa::ValueKind
+    parser::{Expression, Statement, Type}, util,
 };
 
 type BlockId = usize;
@@ -68,8 +71,6 @@ define_instructions!{
         Char(char),
         String(String),
 
-        CondJmp(InstId, BlockId),
-
         Phi {
             operands: Vec<InstId>,
             block: BlockId,
@@ -88,6 +89,7 @@ define_instructions!{
             name: String,
             args: Vec<InstId>,
         },
+        Param(usize), // offset
         UNDEF
     }
     binary {
@@ -97,30 +99,54 @@ define_instructions!{
 }
 
 #[derive(Default)]
-enum Terminator {
+pub enum Terminator {
     #[default]
     FallThrough,
-Return(InstId),
-    Jump(BlockId)
+    Return(InstId),
+    Jump(BlockId),
+    CondJmp(InstId, BlockId),
+}
+
+/// Kinds of basic blocks
+/// Basic, Entry, Exit
+#[derive(Default)]
+pub enum BlockKind {
+    /// Most blocks, no special properties
+    #[default]
+    Basic,
+
+    // TODO: holding params to a call may be unnecessary
+    /// Holds params to a call
+    Entry(Vec<usize>),
+
+    // TODO: Note to future self: I think all stack frames in my language are actually able to be
+    // omitted. If not, you can add an empty Option to this field to store whether or not
+    // destructuring a call stack is necessary 
+    /// Exit block, this may get removed and may have no uses
+    Exit,
 }
 
 pub struct BasicBlock {
-    name: String,
+    // instructions
+    name: Rc<str>,
     instructions: Vec<Inst>,
-    current_defs: HashMap<String, InstId>,
+    current_defs: HashMap<Rc<str>, InstId>,
     phis: Vec<InstId>,
 
+    // CFG
     preds: Vec<BlockId>,
     succs: Vec<BlockId>,
     term: Terminator,
+    kind: BlockKind,
 
-    incomplete: Vec<(String, InstId)>,
+    // construction
+    incomplete: Vec<(Rc<str>, InstId)>,
     sealed: bool,
     filled: bool,
 }
 
 impl BasicBlock {
-    pub fn new(name: String) -> Self {
+    pub fn new(name: Rc<str>) -> Self {
         Self {
             name, 
             instructions: Vec::new(),
@@ -130,50 +156,74 @@ impl BasicBlock {
             preds: Vec::new(),
             succs: Vec::new(),
             term: Terminator::default(),
+            kind: BlockKind::default(),
 
             incomplete: Vec::new(),
             sealed: false,
-            filled: false
+            filled: false,
         }
     }
 }
 
 struct SSABuilder {
+    // old data; lookups
     exprs: Vec<Expression>,
     expr_types: HashMap<Expression, Type>,
-    symbols: HashMap<String, Symbol>,
+    symbols: HashMap<Rc<str>, Symbol>,
 
+    // output 
     blocks: Vec<BasicBlock>,
-    def_use: Vec<Vec<InstId>>,
     values: Vec<Inst>,
+
+    // lookups for SSA gen
+    def_use: Vec<Vec<InstId>>,
     value_numbers: HashMap<Inst, InstId>,
+    pred: BlockId,
 }
 
 impl SSABuilder {
-    pub fn new(globals: HashMap<String, Symbol>) -> Self {
+    pub fn new(globals: HashMap<Rc<str>, Symbol>) -> Self {
         Self {
             exprs: Vec::new(),
             expr_types: HashMap::new(),
             symbols: globals,
 
             blocks: Vec::new(),
-            def_use: Vec::new(),
             values: Vec::new(),
+
+            def_use: Vec::new(),
             value_numbers: HashMap::new(),
+            pred: usize::MAX,
         }
     }
 
+    /// adds `block` to the arena
+    /// implicitly sets the `block` as the predecessor
+    fn add_block(&mut self, block: BasicBlock) -> BlockId {
+        let index = self.blocks.len();
+        self.blocks.push(block);
+        self.pred = index;
+        return index;
+    }
+
+    /// adds a use to the def-use chain of `operand`
     fn add_use(&mut self, operand: InstId, user: InstId) {
+        // note to self: this line existed in my original impl, but i dont see why its needed. if
+        // this errors, reason through it and put it back in if needed
         debug_assert!(!self.def_use[operand].contains(&user));
         self.def_use[operand].push(user);
     }
 
+    /// adds `value` to the arena
+    /// does NOT perform value numbering
     fn add_value(&mut self, value: Inst) -> InstId {
         self.values.push(value);
         self.def_use.push(Vec::new());
         return self.values.len() - 1;
     }
 
+    /// adds `value` to the arena
+    /// does value numbering on `value`
     fn number_value(&mut self, value: Inst) -> InstId {
         match self.value_numbers.get(&value) {
             Some(&id) => id,
@@ -191,40 +241,41 @@ impl SSABuilder {
         }
     }
 
-    fn write_variable(&mut self, variable: String, block: BlockId, value: InstId) {
+    fn write_variable(&mut self, variable: Rc<str>, block: BlockId, value: InstId) {
         self.blocks[block].current_defs.insert(variable, value);
     }
 
-    fn read_variable(&mut self, variable: &String, block: BlockId) -> InstId {
-        match self.blocks[block].current_defs.get(variable) {
+    fn read_variable(&mut self, variable: Rc<str>, block: BlockId) -> InstId {
+        match self.blocks[block].current_defs.get(&variable) {
             Some(value) => value.clone(),
             None => self.read_variable_recursive(variable, block),
         }
     }
 
-    fn read_variable_recursive(&mut self, variable: &String, block: BlockId) -> InstId {
+    fn read_variable_recursive(&mut self, variable: Rc<str>, block: BlockId) -> InstId {
         let mut v: InstId;
         if !self.blocks[block].sealed {
             let phi = Inst::Phi{ operands: Vec::new(), block };
             v = self.number_value(phi);
             self.blocks[block].incomplete.push((variable.clone(), v));
         } else if self.blocks[block].preds.len() == 1 {
-            v = self.read_variable(variable, self.blocks[block].preds[0]);
+            v = self.read_variable(variable.clone(), self.blocks[block].preds[0]);
         } else {
             let phi = Inst::Phi{ operands: Vec::new(), block };
             v = self.add_value(phi);
             self.write_variable(variable.clone(), block, v);
-            v = self.add_phi_operands(variable, v, block);
+            v = self.add_phi_operands(variable.clone(), v, block);
         }
 
-        v
+        self.write_variable(variable, block, v);
+        return v;
     }
 
-    fn add_phi_operands(&mut self, variable: &String, phi: InstId, block: BlockId) -> InstId {
+    fn add_phi_operands(&mut self, variable: Rc<str>, phi: InstId, block: BlockId) -> InstId {
         debug_assert!(matches!(self.values[phi], Inst::Phi{ .. }));
 
         for pred in self.blocks[block].preds.to_owned() {
-            let operand = self.read_variable(variable, pred);
+            let operand = self.read_variable(variable.clone(), pred);
             self.add_use(operand, phi);
             if let Inst::Phi{operands, .. } = &mut self.values[phi] {
                 operands.push(operand);
@@ -234,6 +285,7 @@ impl SSABuilder {
         return self.remove_trivial_phi(phi);
     }
 
+    // TODO: cache "witnesses" as in braun et al.
     fn remove_trivial_phi(&mut self, phi: InstId) -> InstId {
         let mut same: Option<InstId> = None;
         let (operands, block): (&Vec<InstId>, BlockId) = match &self.values[phi] {
@@ -294,16 +346,92 @@ impl SSABuilder {
             _ => unimplemented!(),
         }
 
+        // remove old uses
         self.blocks[block].phis.retain(|&x| x != old);
         self.def_use[old].retain(|&x| x != user);
         self.add_use(new, user);
     }
 
-    fn seal_block(&mut self, block: BlockId) {
+    fn seal(&mut self, block: BlockId) {
         for (variable, phi) in std::mem::take(&mut self.blocks[block].incomplete) {
-            self.add_phi_operands(&variable, phi, block);
+            self.add_phi_operands(variable, phi, block);
         }
 
         self.blocks[block].sealed = true;
+    }
+
+    fn fill(&mut self, block: BlockId) {
+        self.blocks[block].filled = true;
+    }
+
+    fn cfg_edge(&mut self, pred: BlockId, succ: BlockId) {
+        debug_assert!(pred != usize::MAX);
+        self.blocks[pred].succs.push(succ);
+        self.blocks[succ].preds.push(pred);
+    }
+}
+
+impl SSABuilder {
+    /// generating a basic block assumes the block has only one predecessor, and marks it as sealed
+    /// accordingly. Otherwise, generate blocks with `BasicBlock::new(name: Rc<str>);`
+    fn statement(&mut self, stmt: Statement) {
+        match stmt {
+            Statement::ParseError => unreachable!(),
+            Statement::FunctionDeclaration {
+                name,
+                return_type,
+                parameters,
+                body,
+                ..
+            } => {
+                let mut entry_block = BasicBlock::new(Rc::from("function entry"));
+                let entry = self.add_block(entry_block);
+                self.seal(entry);
+
+                // TODO: may be unnecssary, refer to BlockKind enum
+                let mut params = Vec::with_capacity(parameters.len());
+                let mut total_offset = 0;
+                for p in parameters {
+                    let Statement::Parameter { name, t } = *p else { unreachable!() };
+
+                    params.push(total_offset);
+                    let param = Inst::Param(total_offset);
+                    total_offset += util::get_size(&t);
+
+                    let param_id = self.add_value(param);
+                    self.write_variable(Rc::from(name), entry, param_id);
+                }
+
+                let mut exit_block = BasicBlock::new(Rc::from("function entry"));
+                let exit = self.add_block(exit_block);
+
+                self.fill(entry);
+                self.statement(*body);
+
+                // TODO: add returns to a single instruction
+
+                self.cfg_edge(self.pred, exit);
+            }
+            // handled in function declaration
+            Statement::Parameter{..} => unreachable!(),
+            Statement::Block(stmts) => {
+                let b = self.add_block(BasicBlock::new(Rc::from("Basic Block")));
+                self.cfg_edge(self.pred, b);
+                self.seal(b);
+
+                for s in stmts {
+                    self.statement(*s);
+                }
+
+                self.fill(b);
+            } 
+            Statement::WhileStatement { condition, block } => {
+                // TODO: this needs a lot of thought on how i want to do conditionals to optimize
+                // for fallthrough and short circuiting
+            }
+            Statement::IfStatement { condition, block, alt } => {
+                // TODO: same concern as in while statement
+            }
+        }
     }
 }
