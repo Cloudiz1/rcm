@@ -423,7 +423,7 @@ impl SSABuilder {
                 body,
                 ..
             } => {
-                let mut entry_block = BasicBlock::new(Rc::from("function entry"));
+                let entry_block = BasicBlock::new(Rc::from("function entry"));
                 let entry = self.add_block(entry_block);
                 self.seal(entry);
 
@@ -491,7 +491,6 @@ impl SSABuilder {
                 identifier, 
                 variable_type, 
                 initial_value, 
-                constant, 
                 .. 
             } => {
                 if let Some(e) = initial_value {
@@ -570,11 +569,62 @@ impl SSABuilder {
                 // number. so should a + b and b + a
                 // TODO: However, this is a drop in replacement; revisit at CSE implementation
 
-                macro_rules! binary_inst {
-                    ($ty:ident, $lhs:expr, $rhs:expr) => {
-                        let inst = self.()
+                macro_rules! binary_match {
+                    ( 
+                        { $( $tok:ident, $inst:ident );* $(;)? }
+                        $expr_id:expr, 
+                        $operator:expr, 
+                        $lhs:expr, 
+                        $rhs:expr,
+                    ) => {
+                        match $operator {
+                            $(
+                                Token::$tok => {
+                                    let inst = Inst::$inst {
+                                        l: $lhs,
+                                        r: $rhs,
+                                    };
+
+                                    let n = self.add_value(inst, self.purity($expr_id));
+                                    self.add_use(n, $lhs);
+                                    self.add_use(n, $rhs);
+                                    return n;
+                                }
+                            )*
+                            _ => {}
+                        }
                     };
                 }
+
+                let nlhs = self.expr(lhs);
+                let nrhs = self.expr(rhs);
+
+                binary_match!{
+                    {
+                        Plus, Add;
+                        Minus, Sub;
+                        Star, Mul;
+                        Slash, Div;
+                        Percent, Mod;
+                        Pipe, Or;
+                        Caret, Xor;
+                        DoubleLeftCaret, LShift;
+                        DoubleRightCaret, RShift;
+                        LeftCaret, LT;
+                        LeftCaretEqual, LTE;
+                        RightCaret, GT;
+                        RightCaretEqual, GTE;
+                        EqualEqual, Eq;
+                        BangEqual, NotEq;
+                    }
+                    expr,
+                    operator,
+                    nlhs,
+                    nrhs,
+                };
+
+                // TODO: logical ands and ors, all other binary ops are already taken care of :3
+                0
             }
         }
     }
