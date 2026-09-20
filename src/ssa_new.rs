@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap, intrinsics::unreachable, rc::Rc
+    collections::HashMap, rc::Rc
 };
 
 use crate::{
@@ -180,6 +180,8 @@ struct SSABuilder {
     def_use: Vec<Vec<InstId>>,
     value_numbers: HashMap<Inst, InstId>,
     pred: BlockId,
+    exit: BlockId,
+    returns: Vec<InstId>,
 }
 
 impl SSABuilder {
@@ -195,6 +197,8 @@ impl SSABuilder {
             def_use: Vec::new(),
             value_numbers: HashMap::new(),
             pred: usize::MAX,
+            exit: usize::MAX,
+            returns: Vec::new(),
         }
     }
 
@@ -404,14 +408,14 @@ impl SSABuilder {
                 }
 
                 let mut exit_block = BasicBlock::new(Rc::from("function entry"));
-                let exit = self.add_block(exit_block);
+                self.exit = self.add_block(exit_block);
 
                 self.fill(entry);
                 self.statement(*body);
 
                 // TODO: add returns to a single instruction
 
-                self.cfg_edge(self.pred, exit);
+                self.cfg_edge(self.pred, self.exit);
             }
             // handled in function declaration
             Statement::Parameter{..} => unreachable!(),
@@ -437,73 +441,184 @@ impl SSABuilder {
                 // TODO: this needs a lot of thought on how i want to do conditionals to optimize
                 // for fallthrough and short circuiting
             }
+            Statement::StructDeclaration { 
+                name, 
+                members, 
+                methods, 
+                public 
+            } => {
+                // TODO: not completely sure why this doesnt touch members
+                for method in methods {
+                    self.statement(*method);
+                }
+            }
+            Statement::Member { .. } => return,
+            Statement::VariableDeclaration { 
+                identifier, 
+                variable_type, 
+                initial_value, 
+                constant, 
+                .. 
+            } => {
+                if let Some(e) = initial_value {
+                    let rhs = self.expr(e);
+                    self.write_variable(Rc::from(identifier), self.pred, rhs);
+                } else {
+                    let val = self.add_value(Inst::UNDEF);
+                    self.write_variable(Rc::from(identifier), self.pred, val);
+                }
+            }
+            Statement::Return { value } => {
+                if let Some(expr) = value {
+                    // TODO: temporarily set a flag to inline instructions, so something like `call`
+                    // doesnt emit an extra instruction
+                    // either that or figure out the best way to generate temporary variables when
+                    // they are necessary
+                    let ret = self.expr(expr);
+                    self.returns.push(ret);
+                }
+
+                self.cfg_edge(self.pred, self.exit);
+            }
+            Statement::ExpressionStatement(expr) => self.expr(expr),
         }
     }
 }
 
-// i am not even a little bit proud of this code. fixing it means rewriting parser with Box again,
-// and i just dont want to do that right now...
-// TODO: rewrite parser with Box<T> or Rc<RefCell<T>>
-impl SSABuilder {
-    /// mutates the value at the arena in place to invert a logical condition
-    /// recurses for all children
-    fn invert_condition(&mut self, expr: ExpressionId) {
-        match &self.exprs[expr].clone() {
-            Expression::Bool(b) => self.exprs[expr] = Expression::Bool(!b),
-            Expression::Unary{ operator, member } => {
-                if !matches!(operator, Token::Bang) { panic!() };
-                self.exprs[expr] = self.exprs[*member].clone();
-            }
-            Expression::Binary { lhs, operator, rhs } => {
-                match operator {
-                    Token::EqualEqual => self.exprs[expr] = Expression::Binary{ lhs: *lhs, operator: Token::BangEqual, rhs: *rhs},
-                    Token::BangEqual => self.exprs[expr] = Expression::Binary{ lhs: *lhs, operator: Token::EqualEqual, rhs: *rhs},
-                    Token::DoubleAmpersand => {
-                        self.invert_condition(*lhs);
-                        self.invert_condition(*rhs);
-                        self.exprs[expr] = Expression::Binary{
-                            lhs: *lhs, operator: Token::DoublePipe, rhs: *rhs
-                        }
-                    }
-                    Token::DoublePipe => {
-                        self.invert_condition(*lhs);
-                        self.invert_condition(*rhs);
-                        self.exprs[expr] = Expression::Binary{
-                            lhs: *lhs, operator: Token::DoubleAmpersand, rhs: *rhs
-                        }
-                    }
-                    Token::LeftCaret => {
-                        self.invert_condition(*lhs);
-                        self.invert_condition(*rhs);
-                        self.exprs[expr] = Expression::Binary{
-                            lhs: *lhs, operator: Token::RightCaretEqual, rhs: *rhs
-                        }
-                    }
-                    Token::RightCaret => {
-                        self.invert_condition(*lhs);
-                        self.invert_condition(*rhs);
-                        self.exprs[expr] = Expression::Binary{
-                            lhs: *lhs, operator: Token::LeftCaretEqual, rhs: *rhs
-                        }
-                    }
-                    Token::LeftCaretEqual => {
-                        self.invert_condition(*lhs);
-                        self.invert_condition(*rhs);
-                        self.exprs[expr] = Expression::Binary{
-                            lhs: *lhs, operator: Token::RightCaret, rhs: *rhs
-                        }
-                    }
-                    Token::RightCaretEqual => {
-                        self.invert_condition(*lhs);
-                        self.invert_condition(*rhs);
-                        self.exprs[expr] = Expression::Binary{
-                            lhs: *lhs, operator: Token::LeftCaret, rhs: *rhs
-                        }
-                    }
-                    _ => panic!(),
-                }
-            }
-            _ => panic!(),
-        }
-    }
-}
+// // conditional logic
+// impl SSABuilder {
+//     /// turns all logical ands into ors with de morgans laws, which makes the conditions far easier
+//     /// to work with. Returns a vector of conditions, each connceted by a logical or
+//     fn flatten_conditional(&self, e: ExpressionId) -> Vec<Inst> {
+//         let mut out: Vec<Inst> = Vec::new();
+//         self.nested_conditional(e, &mut out);
+//         return out;
+//     }
+//
+//     #[inline]
+//     fn nested_conditional(&self, e: ExpressionId, out: &mut Vec<Inst>) {
+//         match self.exprs[e] {
+//             Expression::Bool(b) => out.push(Inst::Bool(b)),
+//             Expression::Unary { operator, member } => {
+//                 if !matches!(operator, Token::Bang) { panic!(); }
+//                 out.push(self.invert_conditional(member));
+//             }
+//             Expression::Binary { lhs, operator, rhs } => {
+//                 match operator {
+//                     Token::DoubleAmpersand => {
+//                         out.push(self.invert_conditional(lhs));
+//                         out.push(self.invert_conditional(rhs));
+//                     }
+//                     Token::DoublePipe => {
+//                         self.nested_conditional(lhs, out);
+//                         self.nested_conditional(rhs, out);
+//                     }
+//
+//                     Token::EqualEqual => out.push(Inst::Eq { l: lhs, r: rhs }),
+//
+//                     Token::EqualEqual => self.exprs[expr] = Expression::Binary{ lhs: *lhs, operator: Token::BangEqual, rhs: *rhs},
+//                     Token::BangEqual => self.exprs[expr] = Expression::Binary{ lhs: *lhs, operator: Token::EqualEqual, rhs: *rhs},
+//                     Token::LeftCaret => {
+//                         self.invert_condition(*lhs);
+//                         self.invert_condition(*rhs);
+//                         self.exprs[expr] = Expression::Binary{
+//                             lhs: *lhs, operator: Token::RightCaretEqual, rhs: *rhs
+//                         }
+//                     }
+//                     Token::RightCaret => {
+//                         self.invert_condition(*lhs);
+//                         self.invert_condition(*rhs);
+//                         self.exprs[expr] = Expression::Binary{
+//                             lhs: *lhs, operator: Token::LeftCaretEqual, rhs: *rhs
+//                         }
+//                     }
+//                     Token::LeftCaretEqual => {
+//                         self.invert_condition(*lhs);
+//                         self.invert_condition(*rhs);
+//                         self.exprs[expr] = Expression::Binary{
+//                             lhs: *lhs, operator: Token::RightCaret, rhs: *rhs
+//                         }
+//                     }
+//                     Token::RightCaretEqual => {
+//                         self.invert_condition(*lhs);
+//                         self.invert_condition(*rhs);
+//                         self.exprs[expr] = Expression::Binary{
+//                             lhs: *lhs, operator: Token::LeftCaret, rhs: *rhs
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//     }
+//
+//     /// Inverts a conditional
+//     fn invert_conditional(&self, e: ExpressionId) -> Inst {
+//     }
+// }
+
+// // i am not even a little bit proud of this code. fixing it means rewriting parser with Box again,
+// // and i just dont want to do that right now...
+// // TODO: rewrite parser with Box<T> or Rc<RefCell<T>>
+// impl SSABuilder {
+//     /// mutates the value at the arena in place to invert a logical condition
+//     /// recurses for all children
+//     fn invert_condition(&mut self, expr: ExpressionId) {
+//         match &self.exprs[expr].clone() {
+//             Expression::Bool(b) => self.exprs[expr] = Expression::Bool(!b),
+//             Expression::Unary{ operator, member } => {
+//                 if !matches!(operator, Token::Bang) { panic!() };
+//                 self.exprs[expr] = self.exprs[*member].clone();
+//             }
+//             Expression::Binary { lhs, operator, rhs } => {
+//                 match operator {
+//                     Token::EqualEqual => self.exprs[expr] = Expression::Binary{ lhs: *lhs, operator: Token::BangEqual, rhs: *rhs},
+//                     Token::BangEqual => self.exprs[expr] = Expression::Binary{ lhs: *lhs, operator: Token::EqualEqual, rhs: *rhs},
+//                     Token::DoubleAmpersand => {
+//                         self.invert_condition(*lhs);
+//                         self.invert_condition(*rhs);
+//                         self.exprs[expr] = Expression::Binary{
+//                             lhs: *lhs, operator: Token::DoublePipe, rhs: *rhs
+//                         }
+//                     }
+//                     Token::DoublePipe => {
+//                         self.invert_condition(*lhs);
+//                         self.invert_condition(*rhs);
+//                         self.exprs[expr] = Expression::Binary{
+//                             lhs: *lhs, operator: Token::DoubleAmpersand, rhs: *rhs
+//                         }
+//                     }
+//                     Token::LeftCaret => {
+//                         self.invert_condition(*lhs);
+//                         self.invert_condition(*rhs);
+//                         self.exprs[expr] = Expression::Binary{
+//                             lhs: *lhs, operator: Token::RightCaretEqual, rhs: *rhs
+//                         }
+//                     }
+//                     Token::RightCaret => {
+//                         self.invert_condition(*lhs);
+//                         self.invert_condition(*rhs);
+//                         self.exprs[expr] = Expression::Binary{
+//                             lhs: *lhs, operator: Token::LeftCaretEqual, rhs: *rhs
+//                         }
+//                     }
+//                     Token::LeftCaretEqual => {
+//                         self.invert_condition(*lhs);
+//                         self.invert_condition(*rhs);
+//                         self.exprs[expr] = Expression::Binary{
+//                             lhs: *lhs, operator: Token::RightCaret, rhs: *rhs
+//                         }
+//                     }
+//                     Token::RightCaretEqual => {
+//                         self.invert_condition(*lhs);
+//                         self.invert_condition(*rhs);
+//                         self.exprs[expr] = Expression::Binary{
+//                             lhs: *lhs, operator: Token::LeftCaret, rhs: *rhs
+//                         }
+//                     }
+//                     _ => panic!(),
+//                 }
+//             }
+//             _ => panic!(),
+//         }
+//     }
+// }
