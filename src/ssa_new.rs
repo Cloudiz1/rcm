@@ -91,7 +91,10 @@ define_instructions!{
             args: Vec<InstId>,
         },
         Param(usize), // offset
-        UNDEF
+        UNDEF,
+        
+        BNot(usize),
+        Neg(usize),
     }
     binary {
         Add, Sub, Mul, Div, Mod, And, Or, Xor, LShift, RShift,
@@ -226,59 +229,59 @@ impl SSABuilder {
         self.def_use[operand].push(user);
     }
 
-    /// adds a value to the arena. whether or not it performs value number is based on `pure`, if
-    /// true, it will try and find an existing number. If false, it will add to the arena without
-    /// updating the value number hashmap, meaning it will never be found. This method adds to the
-    /// `def_use` chain implicitly
-    fn add_value(&mut self, value: Inst, pure: bool) -> InstId {
-        if pure {
-            match self.value_numbers.get(&value) {
-                Some(&id) => id,
-                None => {
-                    let index = self.values.len();
-
-                    // map a value to its number, allocate it
-                    self.value_numbers.insert(value.clone(), index);
-                    self.values.push(value);
-
-                    // start tracking all uses of value
-                    self.def_use.push(Vec::new());
-                    index
-                }
-            }
-        } else {
-            self.values.push(value);
-            self.def_use.push(Vec::new());
-            return self.values.len() - 1;
-        }
-    }
-
-    // /// adds `value` to the arena
-    // /// does NOT perform value numbering
-    // fn add_value(&mut self, value: Inst) -> InstId {
-    //     self.values.push(value);
-    //     self.def_use.push(Vec::new());
-    //     return self.values.len() - 1;
-    // }
+    // /// adds a value to the arena. whether or not it performs value number is based on `pure`, if
+    // /// true, it will try and find an existing number. If false, it will add to the arena without
+    // /// updating the value number hashmap, meaning it will never be found. This method adds to the
+    // /// `def_use` chain implicitly
+    // fn add_value(&mut self, value: Inst, pure: bool) -> InstId {
+    //     if pure {
+    //         match self.value_numbers.get(&value) {
+    //             Some(&id) => id,
+    //             None => {
+    //                 let index = self.values.len();
     //
-    // /// adds `value` to the arena
-    // /// does value numbering on `value`
-    // fn number_value(&mut self, value: Inst) -> InstId {
-    //     match self.value_numbers.get(&value) {
-    //         Some(&id) => id,
-    //         None => {
-    //             let index = self.values.len();
+    //                 // map a value to its number, allocate it
+    //                 self.value_numbers.insert(value.clone(), index);
+    //                 self.values.push(value);
     //
-    //             // map a value to its number, allocate it
-    //             self.value_numbers.insert(value.clone(), index);
-    //             self.values.push(value);
-    //
-    //             // start tracking all uses of value
-    //             self.def_use.push(Vec::new());
-    //             index
+    //                 // start tracking all uses of value
+    //                 self.def_use.push(Vec::new());
+    //                 index
+    //             }
     //         }
+    //     } else {
+    //         self.values.push(value);
+    //         self.def_use.push(Vec::new());
+    //         return self.values.len() - 1;
     //     }
     // }
+
+    /// adds `value` to the arena
+    /// does NOT perform value numbering
+    fn new_value(&mut self, value: Inst) -> InstId {
+        self.values.push(value);
+        self.def_use.push(Vec::new());
+        return self.values.len() - 1;
+    }
+
+    /// adds `value` to the arena
+    /// does value numbering on `value`
+    fn add_value(&mut self, value: Inst) -> InstId {
+        match self.value_numbers.get(&value) {
+            Some(&id) => id,
+            None => {
+                let index = self.values.len();
+
+                // map a value to its number, allocate it
+                self.value_numbers.insert(value.clone(), index);
+                self.values.push(value);
+
+                // start tracking all uses of value
+                self.def_use.push(Vec::new());
+                index
+            }
+        }
+    }
 
     fn write_variable(&mut self, variable: Rc<str>, block: BlockId, value: InstId) {
         self.blocks[block].current_defs.insert(variable, value);
@@ -295,13 +298,13 @@ impl SSABuilder {
         let mut v: InstId;
         if !self.blocks[block].sealed {
             let phi = Inst::Phi{ operands: Vec::new(), block };
-            v = self.add_value(phi, false);
+            v = self.new_value(phi);
             self.blocks[block].incomplete.push((variable.clone(), v));
         } else if self.blocks[block].preds.len() == 1 {
             v = self.read_variable(variable.clone(), self.blocks[block].preds[0]);
         } else {
             let phi = Inst::Phi{ operands: Vec::new(), block };
-            v = self.add_value(phi, false);
+            v = self.new_value(phi);
             self.write_variable(variable.clone(), block, v);
             v = self.add_phi_operands(variable.clone(), v, block);
         }
@@ -338,7 +341,7 @@ impl SSABuilder {
             same = Some(op);
         }
 
-        let same = same.unwrap_or(self.add_value(Inst::UNDEF, false));
+        let same = same.unwrap_or(self.new_value(Inst::UNDEF));
         for user in self.def_use[phi].to_owned() {
             if user == phi { continue; }
             self.reroute(user, phi, same, block);
@@ -437,7 +440,7 @@ impl SSABuilder {
                     let param = Inst::Param(total_offset);
                     total_offset += util::get_size(&t);
 
-                    let param_id = self.add_value(param, false);
+                    let param_id = self.new_value(param);
                     self.write_variable(Rc::from(name), entry, param_id);
                 }
 
@@ -497,7 +500,7 @@ impl SSABuilder {
                     let rhs = self.expr(e);
                     self.write_variable(Rc::from(identifier), self.pred, rhs);
                 } else {
-                    let val = self.add_value(Inst::UNDEF, false);
+                    let val = self.new_value(Inst::UNDEF);
                     self.write_variable(Rc::from(identifier), self.pred, val);
                 }
             }
@@ -519,51 +522,52 @@ impl SSABuilder {
 }
 
 impl SSABuilder {
-    fn purity(&mut self, expr: ExpressionId) -> bool {
-        if let Some(purity) = self.purity.get(expr) {
-            return *purity;
-        };
-
-        let purity = match self.exprs[expr] {
-            // primatives
-            Expression::Int(_)
-            | Expression::Float(_)
-            | Expression::Bool(_)
-            | Expression::Char(_)
-            | Expression::String(_)
-            | Expression::Null
-            | Expression::Identifier(_) => true,
-            // TODO: both of these require memory SSA
-            Expression::Dot { .. }
-            | Expression::ArrayAccess { .. } => false,
-            // TODO: we can definitely make this smarter, not worth rn
-            Expression::FunctionCall { .. } => false,
-            Expression::Binary { lhs, rhs, .. } => {
-                let lpurity = self.purity(lhs);
-                let rpurity = self.purity(rhs);
-
-                // a binary expr is pure if lhs and rhs is pure
-                lpurity && rpurity             }
-            Expression::Unary { member, .. } => self.purity(member),
-            Expression::Assignment { value, .. } => self.purity(value),
-            Expression::ArrayConstructor { ref values } => {
-                values.clone().iter().all(|&x| self.purity(x))
-            }
-            Expression::StructConstructor { ref members, .. } => {
-                members.clone().values().all(|&x| self.purity(x))
-            }
-        };
-
-        self.purity.insert(expr, purity);
-        purity
-    }
+    // fn purity(&mut self, expr: ExpressionId) -> bool {
+    //     if let Some(purity) = self.purity.get(expr) {
+    //         return *purity;
+    //     };
+    //
+    //     let purity = match self.exprs[expr] {
+    //         // primatives
+    //         Expression::Int(_)
+    //         | Expression::Float(_)
+    //         | Expression::Bool(_)
+    //         | Expression::Char(_)
+    //         | Expression::String(_)
+    //         | Expression::Null
+    //         | Expression::Identifier(_) => true,
+    //         // TODO: both of these require memory SSA
+    //         Expression::Dot { .. }
+    //         | Expression::ArrayAccess { .. } => false,
+    //         // TODO: we can definitely make this smarter, not worth rn
+    //         Expression::FunctionCall { .. } => false,
+    //         Expression::Binary { lhs, rhs, .. } => {
+    //             let lpurity = self.purity(lhs);
+    //             let rpurity = self.purity(rhs);
+    //
+    //             // a binary expr is pure if lhs and rhs is pure
+    //             lpurity && rpurity             }
+    //         Expression::Unary { member, .. } => self.purity(member),
+    //         Expression::Assignment { value, .. } => self.purity(value),
+    //         Expression::ArrayConstructor { ref values } => {
+    //             values.clone().iter().all(|&x| self.purity(x))
+    //         }
+    //         Expression::StructConstructor { ref members, .. } => {
+    //             members.clone().values().all(|&x| self.purity(x))
+    //         }
+    //     };
+    //
+    //     self.purity.insert(expr, purity);
+    //     purity
+    // }
 
     fn expr(&self, expr: ExpressionId) -> InstId {
         match self.exprs[expr] {
-            Expression::Int(i) => self.add_value(Inst::Int(i), true),
-            Expression::Float(f) => self.add_value(Inst::Float(HashableFloat(f)), true),
-            Expression::Bool(b) => self.add_value(Inst::Bool(b), true),
-            Expression::Char(c) => self.add_value(Inst::Char(c), true),
+            Expression::Int(i) => self.add_value(Inst::Int(i)),
+            Expression::Float(f) => self.add_value(Inst::Float(HashableFloat(f))),
+            Expression::Bool(b) => self.add_value(Inst::Bool(b)),
+            Expression::Char(c) => self.add_value(Inst::Char(c)),
+            Expression::Identifier(name) => self.read_variable(Rc::from(name), self.pred),
             Expression::Binary { lhs, operator, rhs } => {
                 // some of these need to be ordered, 2 + 1 and 1 + 2 should have the same value
                 // number. so should a + b and b + a
@@ -585,7 +589,7 @@ impl SSABuilder {
                                         r: $rhs,
                                     };
 
-                                    let n = self.add_value(inst, self.purity($expr_id));
+                                    let n = self.add_value(inst);
                                     self.add_use(n, $lhs);
                                     self.add_use(n, $rhs);
                                     return n;
@@ -625,6 +629,35 @@ impl SSABuilder {
 
                 // TODO: logical ands and ors, all other binary ops are already taken care of :3
                 0
+            }
+            Expression::Unary { 
+                operator, 
+                member 
+            } => {
+                let member_inst = self.expr(member);
+                match operator {
+                    Token::Bang => {
+                        let inst = Inst::BNot(member_inst);
+                        let inst_n = self.add_value(inst);
+                        self.add_use(member_inst, inst_n);
+                        inst_n
+                    }
+                    Token::Minus => {
+                        let inst = Inst::Neg(member_inst);
+                        let inst_n = self.add_value(inst);
+                        self.add_use(member_inst, inst_n);
+                        inst_n
+                    }
+                    Token::Ampersand => unimplemented!(),
+                    Token::DotStar => unimplemented!(),
+                    _ => panic!("not a unary"),
+                }
+            }
+            Expression::Assignment { 
+                identifier,
+                value 
+            } => {
+                
             }
         }
     }
