@@ -87,7 +87,7 @@ define_instructions!{
         },
         Address(InstId),
         Call {
-            name: String,
+            name: Rc<str>,
             args: Vec<InstId>,
         },
         Param(usize), // offset
@@ -590,8 +590,8 @@ impl SSABuilder {
                                     };
 
                                     let n = self.add_value(inst);
-                                    self.add_use(n, $lhs);
-                                    self.add_use(n, $rhs);
+                                    self.add_use($lhs, n);
+                                    self.add_use($rhs, n);
                                     return n;
                                 }
                             )*
@@ -628,7 +628,7 @@ impl SSABuilder {
                 };
 
                 // TODO: logical ands and ors, all other binary ops are already taken care of :3
-                0
+                todo!()
             }
             Expression::Unary { 
                 operator, 
@@ -657,7 +657,42 @@ impl SSABuilder {
                 identifier,
                 value 
             } => {
+                // assignment can refer to different things; main cases:
+                // simple identifier, x = 1
+                // array assignment, x[0] = 1
+                // dot member assignemnt, x.foo = 1
+                // memory deref assignment, x.* = 1
+                // TODO: the other cases, we only consider the simple case for now
+
+                let rhs = self.expr(value);
+                if let Expression::Identifier(name) = self.exprs[identifier] {
+                    self.write_variable(Rc::from(name), self.pred, rhs);
+                }
+
+                todo!();
+            }
+            Expression::FunctionCall { 
+                identifier, 
+                args 
+            } => {
+                // TODO: this needs a way to handle dot operations, foo.bar()
+                // again, we only consider the basic case for now
                 
+                let Expression::Identifier(name) = self.exprs[identifier] else {
+                    todo!();
+                };
+
+                let args = args.iter()
+                    .map(|&x| self.expr(x))
+                    .collect::<Vec<InstId>>();
+
+                let call = self.new_value(Inst::Call {
+                    name: Rc::from(name),
+                    args 
+                });
+
+                args.iter().for_each(|&x| self.add_use(x, call));
+                call
             }
         }
     }
