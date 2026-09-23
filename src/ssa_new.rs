@@ -87,7 +87,7 @@ define_instructions!{
         },
         Address(InstId),
         Call {
-            name: Rc<str>,
+            name: String,
             args: Vec<InstId>,
         },
         Param(usize), // offset
@@ -102,7 +102,7 @@ define_instructions!{
     } 
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub enum Terminator {
     #[default]
     FallThrough,
@@ -130,11 +130,12 @@ pub enum Terminator {
 //     Exit,
 // }
 
+#[derive(Debug)]
 pub struct BasicBlock {
-    name: Rc<str>,
+    name: String,
     /// An arena of instructions; uses `InstId` as an index
     instructions: Vec<Inst>,
-    current_defs: HashMap<Rc<str>, InstId>,
+    current_defs: HashMap<String, InstId>,
     /// We keep this as phis must run concurrently as the first instructions in a block. This serves
     /// as a fast and convenient lookup for that. These refer to values that already exist in `instructions`
     phis: Vec<InstId>,
@@ -146,14 +147,14 @@ pub struct BasicBlock {
     // kind: BlockKind,
 
     // construction
-    incomplete: Vec<(Rc<str>, InstId)>,
+    incomplete: Vec<(String, InstId)>,
     value_numbers: HashMap<Inst, InstId>,
     sealed: bool,
     filled: bool,
 }
 
 impl BasicBlock {
-    pub fn new(name: Rc<str>) -> Self {
+    pub fn new(name: String) -> Self {
         Self {
             name, 
             instructions: Vec::new(),
@@ -173,8 +174,15 @@ impl BasicBlock {
     }
 }
 
+#[derive(Debug)]
+pub struct Program {
+    fns: Vec<Function>,
+    // anything else needed. globals, data, etc
+}
+
+#[derive(Default, Debug)]
 struct Function {
-    name: Rc<str>,
+    name: String,
     blocks: Vec<BasicBlock>,
     values: Vec<Inst>,
     def_use: Vec<Vec<InstId>>,
@@ -185,7 +193,7 @@ struct Function {
 }
 
 impl Function {
-    pub fn new(name: Rc<str>) -> Self {
+    pub fn new(name: String) -> Self {
         Self {
             name,
             blocks: Vec::new(),
@@ -199,11 +207,11 @@ impl Function {
     }
 }
 
-struct SSABuilder {
+pub struct SSABuilder {
     // old data; lookups
     exprs: Vec<Expression>,
     expr_types: HashMap<ExpressionId, Type>,
-    symbols: HashMap<Rc<str>, Symbol>,
+    symbols: HashMap<String, Symbol>,
 
     curr: BlockId,
     returns: Vec<InstId>,
@@ -212,7 +220,7 @@ struct SSABuilder {
 
 impl SSABuilder {
     pub fn new(
-        globals: HashMap<Rc<str>, Symbol>,
+        globals: HashMap<String, Symbol>,
         exprs: Vec<Expression>,
         expr_types: HashMap<ExpressionId, Type>,
     ) -> Self {
@@ -223,7 +231,7 @@ impl SSABuilder {
 
             curr: usize::MAX,
             returns: Vec::new(),
-            f: Function::new(Rc::from("")),
+            f: Function::default(),
         }
     }
 
@@ -277,18 +285,18 @@ impl SSABuilder {
         return n;
     }
 
-    fn write_variable(&mut self, variable: Rc<str>, block: BlockId, value: InstId) {
+    fn write_variable(&mut self, variable: String, block: BlockId, value: InstId) {
         self.f.blocks[block].current_defs.insert(variable, value);
     }
 
-    fn read_variable(&mut self, variable: Rc<str>, block: BlockId) -> InstId {
+    fn read_variable(&mut self, variable: String, block: BlockId) -> InstId {
         match self.f.blocks[block].current_defs.get(&variable) {
             Some(value) => value.clone(),
             None => self.read_variable_recursive(variable, block),
         }
     }
 
-    fn read_variable_recursive(&mut self, variable: Rc<str>, block: BlockId) -> InstId {
+    fn read_variable_recursive(&mut self, variable: String, block: BlockId) -> InstId {
         let mut v: InstId;
         if !self.f.blocks[block].sealed {
             let phi = Inst::Phi{ operands: Vec::new(), block };
@@ -307,7 +315,7 @@ impl SSABuilder {
         return v;
     }
 
-    fn add_phi_operands(&mut self, variable: Rc<str>, phi: InstId, block: BlockId) -> InstId {
+    fn add_phi_operands(&mut self, variable: String, phi: InstId, block: BlockId) -> InstId {
         debug_assert!(matches!(self.f.values[phi], Inst::Phi{ .. }));
 
         for pred in self.f.blocks[block].preds.to_owned() {
@@ -410,7 +418,7 @@ impl SSABuilder {
 
 impl SSABuilder {
     /// generating a basic block assumes the block has only one predecessor, and marks it as sealed
-    /// accordingly. Otherwise, generate blocks with `BasicBlock::new(name: Rc<str>);`
+    /// accordingly. Otherwise, generate blocks with `BasicBlock::new(name: String);`
     fn statement(&mut self, stmt: Statement) {
         match stmt {
             Statement::ParseError => unreachable!(),
@@ -421,10 +429,12 @@ impl SSABuilder {
                 body,
                 ..
             } => {
-                let exit_block = BasicBlock::new(Rc::from("function entry"));
+                self.f = Function::new(name);
+
+                let exit_block = BasicBlock::new("function entry".to_owned());
                 self.f.exit = self.add_block(exit_block);
 
-                let entry_block = BasicBlock::new(Rc::from("function entry"));
+                let entry_block = BasicBlock::new("function entry".to_owned());
                 let entry = self.add_block(entry_block);
                 self.f.entry = entry;
                 self.curr = entry;
@@ -441,7 +451,7 @@ impl SSABuilder {
                     total_offset += util::get_size(&t);
 
                     let param_id = self.new_value(param);
-                    self.write_variable(Rc::from(name), entry, param_id);
+                    self.write_variable(name, entry, param_id);
                 }
 
                 self.fill(entry);
@@ -454,7 +464,7 @@ impl SSABuilder {
             // handled in function declaration
             Statement::Parameter{..} => unreachable!(),
             Statement::Block(stmts) => {
-                let b = self.add_block(BasicBlock::new(Rc::from("Basic Block")));
+                let b = self.add_block(BasicBlock::new("Basic Block".to_owned()));
                 self.cfg_edge(self.curr, b);
                 self.seal(b);
                 self.curr = b;
@@ -465,8 +475,13 @@ impl SSABuilder {
 
                 self.fill(b);
             } 
-            Statement::IfStatement { condition, block, alt } => {
-                let entry = self.add_block(BasicBlock::new(Rc::from("if condition")));
+            Statement::IfStatement { 
+                condition, 
+                block, 
+                alt 
+            } => {
+                let entry = self.add_block(BasicBlock::new("if condition".to_owned()));
+                self.cfg_edge(self.curr, entry);
                 self.curr = entry;
                 self.seal(entry);
 
@@ -497,10 +512,10 @@ impl SSABuilder {
             } => {
                 if let Some(e) = initial_value {
                     let rhs = self.expr(e);
-                    self.write_variable(Rc::from(identifier), self.curr, rhs);
+                    self.write_variable(identifier, self.curr, rhs);
                 } else {
                     let val = self.new_value(Inst::UNDEF);
-                    self.write_variable(Rc::from(identifier), self.curr, val);
+                    self.write_variable(identifier, self.curr, val);
                 }
             }
             Statement::Return { value } => {
@@ -568,7 +583,7 @@ impl SSABuilder {
             Expression::Char(c) => self.add_value(Inst::Char(c)),
             Expression::String(s) => self.add_value(Inst::String(s)),
             Expression::Null => todo!(),
-            Expression::Identifier(name) => self.read_variable(Rc::from(name), self.curr),
+            Expression::Identifier(name) => self.read_variable(name, self.curr),
             Expression::Binary { lhs, operator, rhs } => {
                 // some of these need to be ordered, 2 + 1 and 1 + 2 should have the same value
                 // number. so should a + b and b + a
@@ -667,7 +682,7 @@ impl SSABuilder {
 
                 let rhs = self.expr(value);
                 if let Expression::Identifier(name) = &self.exprs[identifier] {
-                    self.write_variable(Rc::from(name.clone()), self.curr, rhs);
+                    self.write_variable(name.clone(), self.curr, rhs);
                 }
 
                 todo!();
@@ -688,7 +703,7 @@ impl SSABuilder {
                     .collect::<Vec<InstId>>();
 
                 let call = self.new_value(Inst::Call {
-                    name: Rc::from(name.clone()),
+                    name,
                     args: args.clone()
                 });
 
@@ -721,6 +736,25 @@ impl SSABuilder {
             } => {
                 todo!();
             }
+        }
+    }
+
+    fn gen_func(&mut self, statement: Statement) -> Function {
+        debug_assert!(matches!(statement, Statement::FunctionDeclaration { .. }));
+
+        self.statement(statement);
+        std::mem::take(&mut self.f)
+    }
+
+    pub fn gen_ir(&mut self, statements: Vec<Statement>) -> Program {
+        // TODO: this only supports functions atm
+        Program {
+            fns: statements
+                .into_iter()
+                .map(|x| {
+                    self.gen_func(x)
+                })
+                .collect::<Vec<Function>>()
         }
     }
 }

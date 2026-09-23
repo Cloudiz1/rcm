@@ -42,12 +42,16 @@ fn main() {
     parser::print_ast(&ast);
     parser::print_expressions(&expression_arena);
 
-    let mut ssa = ssa::SSAGen::new(globals, expression_arena, types);
-    let ir = ssa.ir_gen(ast);
+    let mut ssa = ssa_new::SSABuilder::new(globals, expression_arena, types);
+    let ir = ssa.gen_ir(ast);
+    dbg!(ir);
 
-    ssa::print_ids(&ir);
-    ssa::print_blocks(&ir);
-    ssa::print_misc(&ir);
+    // let mut ssa = ssa::SSAGen::new(globals, expression_arena, types);
+    // let ir = ssa.ir_gen(ast);
+
+    // ssa::print_ids(&ir);
+    // ssa::print_blocks(&ir);
+    // ssa::print_misc(&ir);
 
     // let mut codegen = codegen::Codegen::new(&ir);
     // for &function in &ir.functions {
