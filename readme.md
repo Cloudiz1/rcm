@@ -47,6 +47,6 @@ In a previous iteration, this project compiled assembly for basic instructions a
 - [ ] link time optimization
 
 ## References
-[Engineering a Compiler](https://gacbe.ac.in/images/E%20books/Engineering%20a%20Compiler%202nd%20ed%20-%20K.%20Cooper,%20L.%20Torczon%20(Morgan%20Kaufman,%202012)%20BBS%20bbbb.pdf)
-[Braun et al's simple and efficient construction of SSA form](https://c9x.me/compile/bib/braun13cc.pdf)
-[Boissinot's revisiting out of SSA translation for correctness](https://inria.hal.science/inria-00349925v1/document)
+- [Engineering a Compiler](https://gacbe.ac.in/images/E%20books/Engineering%20a%20Compiler%202nd%20ed%20-%20K.%20Cooper,%20L.%20Torczon%20(Morgan%20Kaufman,%202012)%20BBS%20bbbb.pdf)
+- [Braun et al's simple and efficient construction of SSA form](https://c9x.me/compile/bib/braun13cc.pdf)
+- [Boissinot's revisiting out of SSA translation for correctness](https://inria.hal.science/inria-00349925v1/document)
