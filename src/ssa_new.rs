@@ -1,11 +1,12 @@
 use std::{
-    collections::HashMap, rc::Rc
+    collections::HashMap
 };
 
 use crate::{
     lexer::Token,
     analysis::Symbol,
-    parser::{Expression, ExpressionId, Statement, Type}, util,
+    parser::{Expression, ExpressionId, Statement, Type}, 
+    util,
 };
 
 type BlockId = usize;
@@ -98,9 +99,12 @@ define_instructions!{
     }
     binary {
         Add, Sub, Mul, Div, Mod, And, Or, Xor, LShift, RShift,
-        LNot, LAnd, LOr, GT, GTE, LT, LTE, Eq, NotEq
+        LNot, GT, GTE, LT, LTE, Eq, NotEq,
+        LAnd, LOr, // these two are ONLY used for binary expressions, not conditionals, those are
+                   // handled through short circuiting
     } 
 }
+
 
 #[derive(Default, Debug)]
 pub enum Terminator {
@@ -343,7 +347,7 @@ impl SSABuilder {
             same = Some(op);
         }
 
-        let same = same.unwrap_or(self.new_value(Inst::UNDEF));
+        let same = same.unwrap_or_else(|| self.new_value(Inst::UNDEF));
         for user in self.f.def_use[phi].to_owned() {
             if user == phi { continue; }
             self.reroute(user, phi, same, block);
@@ -485,6 +489,9 @@ impl SSABuilder {
                 self.curr = entry;
                 self.seal(entry);
 
+                let jump = self.add_block(BasicBlock::new("jump".to_string()));
+                self.conditional(condition, entry, None);
+
                 // the conditions hold no instructions, just a conditional jump as a terminating value
                 self.fill(entry);
             }
@@ -536,44 +543,113 @@ impl SSABuilder {
 }
 
 impl SSABuilder {
-    // fn purity(&mut self, expr: ExpressionId) -> bool {
-    //     if let Some(purity) = self.purity.get(expr) {
-    //         return *purity;
-    //     };
-    //
-    //     let purity = match self.exprs[expr] {
-    //         // primatives
-    //         Expression::Int(_)
-    //         | Expression::Float(_)
-    //         | Expression::Bool(_)
-    //         | Expression::Char(_)
-    //         | Expression::String(_)
-    //         | Expression::Null
-    //         | Expression::Identifier(_) => true,
-    //         // TODO: both of these require memory SSA
-    //         Expression::Dot { .. }
-    //         | Expression::ArrayAccess { .. } => false,
-    //         // TODO: we can definitely make this smarter, not worth rn
-    //         Expression::FunctionCall { .. } => false,
-    //         Expression::Binary { lhs, rhs, .. } => {
-    //             let lpurity = self.purity(lhs);
-    //             let rpurity = self.purity(rhs);
-    //
-    //             // a binary expr is pure if lhs and rhs is pure
-    //             lpurity && rpurity             }
-    //         Expression::Unary { member, .. } => self.purity(member),
-    //         Expression::Assignment { value, .. } => self.purity(value),
-    //         Expression::ArrayConstructor { ref values } => {
-    //             values.clone().iter().all(|&x| self.purity(x))
-    //         }
-    //         Expression::StructConstructor { ref members, .. } => {
-    //             members.clone().values().all(|&x| self.purity(x))
-    //         }
-    //     };
-    //
-    //     self.purity.insert(expr, purity);
-    //     purity
-    // }
+    /// Builds a CFG for a conditional statement (generalizable to while loops (i think))
+    /// This function takes an entry point for its initial condition, and will add successors if
+    /// necessary to build a proper short circuiting CFG. All generated blocks will jump to `jmp`,
+    /// otherwise they will fall through. The last block in this chain of conditions is returned.
+    fn conditional(
+        &mut self,
+        cond: ExpressionId,
+        entry: BlockId,
+        false_block: Option<BlockId>,
+    ) -> BlockId {
+        match self.exprs[cond].clone() {
+            Expression::Binary { 
+                lhs, 
+                operator, 
+                rhs 
+            } => {
+                // what ultimately resides in `jmp` actually depends on the type of conditional we
+                // have. A logical and operation would fit best with short circuiting to the false
+                // branch, for example
+                // however, if it already exists (in a nested conditional, for example), we'll just
+                // use that name instead
+                let falseb = false_block.unwrap_or_else(|| {
+                    let name = match operator {
+                        Token::DoubleAmpersand => "false branch".to_owned(),
+                        _ => "true branch".to_owned()
+                    };
+
+                    self.add_block(BasicBlock::new(name))
+                });
+
+                /*
+                 * if (a || b) && (a || c)
+                 * lhs:
+                 *  if a, JE rhs
+                 *  if b, JE rhs
+                 *  JE false
+                 *
+                 * rhs:
+                 *  if a, JE true
+                 *  if c, JE true
+                 *  JE false
+                 *
+                 * true:
+                 * false:
+                 *  JE merge
+                 *
+                 * merge:
+                 *
+                 * if (a && b) || (a && c)
+                 * lhs:
+                 *  if !a, JE rhs
+                 *  if !b, JE rhs
+                 *  JE true
+                 *
+                 * rhs:
+                 *  if !a, JE false
+                 *  if !c, JE false
+                 *   JE true
+                 *
+                 * true:
+                 * false:
+                 *  JE merge
+                 *
+                 * merge:
+                 *
+                 * if a && b
+                 * if !a, JE false
+                 * if !b, JE false
+                 *
+                 * true:
+                 *  JE merge
+                 * 
+                 * false:
+                 * merge:
+                 *
+                 * if a || b 
+                 * if a, JE true
+                 * if b, JE true
+                 * false:
+                 *  JE merge
+                 *
+                 * true:
+                 * merge:
+                 */
+
+                match operator {
+                    Token::DoublePipe => {
+                        // intermediate blocks are required for nested binary conditionals
+                        let im = self.add_block(BasicBlock::new("intermediate".to_owned()));
+                        self.cfg_edge(im, falseb);
+
+                        let lhsb = self.add_block(BasicBlock::new("lhs condition".to_owned()));
+                        let rhsb = self.add_block(BasicBlock::new("rhs condition".to_owned()));
+
+                        // if lhs is false, jump to rhs. if rhs if false, jump to false
+                        let lhs = self.conditional(lhs, lhsb, Some(rhsb));
+                        let rhs = self.conditional(rhs, rhsb, Some(im));
+                    }
+                    Token::DoubleAmpersand => todo!(),
+                    _ => unreachable!()
+                }
+
+                0
+            }
+            _ => todo!(),
+        }
+    }
 
     fn expr(&mut self, expr: ExpressionId) -> InstId {
         match self.exprs[expr].clone() {
@@ -589,13 +665,16 @@ impl SSABuilder {
                 // number. so should a + b and b + a
                 // TODO: However, this is a drop in replacement; revisit at CSE implementation
 
+                let nlhs = self.expr(lhs);
+                let nrhs = self.expr(rhs);
+
                 macro_rules! binary_match {
                     ( 
                         { $( $tok:ident, $inst:ident );* $(;)? }
                         $expr_id:expr, 
                         $operator:expr, 
                         $lhs:expr, 
-                        $rhs:expr,
+                        $rhs:expr $(,)?
                     ) => {
                         match $operator {
                             $(
@@ -616,9 +695,8 @@ impl SSABuilder {
                     };
                 }
 
-                let nlhs = self.expr(lhs);
-                let nrhs = self.expr(rhs);
-
+                // we keep the logical ands and logical ors here because short circuiting is done
+                // through a different method
                 binary_match!{
                     {
                         Plus, Add;
@@ -636,6 +714,8 @@ impl SSABuilder {
                         RightCaretEqual, GTE;
                         EqualEqual, Eq;
                         BangEqual, NotEq;
+                        DoubleAmpersand, LAnd;
+                        DoublePipe, LOr;
                     }
                     expr,
                     operator,
@@ -643,8 +723,7 @@ impl SSABuilder {
                     nrhs,
                 };
 
-                // TODO: logical ands and ors, all other binary ops are already taken care of :3
-                todo!()
+                panic!("unhandled binary operator");
             }
             Expression::Unary { 
                 operator, 
@@ -653,10 +732,13 @@ impl SSABuilder {
                 let member_inst = self.expr(member);
                 match operator {
                     Token::Bang => {
-                        let inst = Inst::BNot(member_inst);
-                        let inst_n = self.add_value(inst);
-                        self.add_use(member_inst, inst_n);
-                        inst_n
+                        // TODO: i should invert this now.
+
+                        // let inst = Inst::BNot(member_inst);
+                        // let inst_n = self.add_value(inst);
+                        // self.add_use(member_inst, inst_n);
+                        // inst_n
+                        todo!();
                     }
                     Token::Minus => {
                         let inst = Inst::Neg(member_inst);

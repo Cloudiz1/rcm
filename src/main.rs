@@ -38,31 +38,31 @@ fn main() {
     let mut analyzer = analysis::Analyzer::new(&mut expression_arena);
     let (globals, types) = analyzer.analyze(&ast);
 
-    dbg!(&types);
-    parser::print_ast(&ast);
-    parser::print_expressions(&expression_arena);
+    // dbg!(&types);
+    // parser::print_ast(&ast);
+    // parser::print_expressions(&expression_arena);
 
-    let mut ssa = ssa_new::SSABuilder::new(globals, expression_arena, types);
-    let ir = ssa.gen_ir(ast);
-    dbg!(ir);
+    // let mut ssa = ssa_new::SSABuilder::new(globals, expression_arena, types);
+    // let ir = ssa.gen_ir(ast);
+    // dbg!(ir);
 
-    // let mut ssa = ssa::SSAGen::new(globals, expression_arena, types);
-    // let ir = ssa.ir_gen(ast);
+    let mut ssa = ssa::SSAGen::new(globals, expression_arena, types);
+    let ir = ssa.ir_gen(ast);
 
     // ssa::print_ids(&ir);
     // ssa::print_blocks(&ir);
     // ssa::print_misc(&ir);
 
-    // let mut codegen = codegen::Codegen::new(&ir);
-    // for &function in &ir.functions {
-    //     codegen.create_block(function);
-    // }
-    //
-    // codegen.create_block(ir.entry);
-    // let blocks = codegen.get_blocks();
+    let mut codegen = codegen::Codegen::new(&ir);
+    for &function in &ir.functions {
+        codegen.create_block(function);
+    }
+
+    codegen.create_block(ir.entry);
+    let blocks = codegen.get_blocks();
     // dbg!(&blocks);
-    //
-    // let asm = asm::AsmGenerator::new()
-    //     .create_asm(blocks);
+
+    let asm = asm::AsmGenerator::new()
+        .create_asm(blocks);
     // // let dom_tree = ralloc::find_idoms(&ir);
 }
